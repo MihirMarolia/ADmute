@@ -18,7 +18,8 @@ internal class SettingsRepository(context: Context) {
         showOverlay = preferences.getBoolean(KEY_SHOW_OVERLAY, true),
         scanInterval = preferences.getFloat(KEY_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL).toDouble(),
         verboseDiagnostics = preferences.getBoolean(KEY_VERBOSE_DIAGNOSTICS, false),
-        idMarkers = splitLines(preferences.getString(KEY_ID_MARKERS, "").orEmpty())
+        idMarkers = splitLines(preferences.getString(KEY_ID_MARKERS, "").orEmpty()),
+        confidenceThreshold = preferences.getFloat(KEY_CONFIDENCE_THRESHOLD, DEFAULT_CONFIDENCE_THRESHOLD).toDouble()
     )
 
     fun save(settings: AppSettings) {
@@ -32,6 +33,7 @@ internal class SettingsRepository(context: Context) {
             .putFloat(KEY_SCAN_INTERVAL, settings.scanInterval.toFloat())
             .putBoolean(KEY_VERBOSE_DIAGNOSTICS, settings.verboseDiagnostics)
             .putString(KEY_ID_MARKERS, settings.idMarkers.joinToString("\n"))
+            .putFloat(KEY_CONFIDENCE_THRESHOLD, settings.confidenceThreshold.toFloat())
             .apply()
     }
 
@@ -54,7 +56,8 @@ internal class SettingsRepository(context: Context) {
         val showOverlay: Boolean,
         val scanInterval: Double = DEFAULT_SCAN_INTERVAL,
         val verboseDiagnostics: Boolean = false,
-        val idMarkers: Set<String> = emptySet()
+        val idMarkers: Set<String> = emptySet(),
+        val confidenceThreshold: Double = DEFAULT_CONFIDENCE_THRESHOLD
     ) {
         fun appliesTo(packageName: String?): Boolean =
             watchAllApps || (packageName != null && packageName in packageNames)
@@ -71,10 +74,12 @@ internal class SettingsRepository(context: Context) {
         private const val KEY_SCAN_INTERVAL = "scan_interval"
         private const val KEY_VERBOSE_DIAGNOSTICS = "verbose_diagnostics"
         private const val KEY_ID_MARKERS = "id_markers"
+        private const val KEY_CONFIDENCE_THRESHOLD = "confidence_threshold"
 
         const val DEFAULT_RESUME_DELAY_MS = 1_800L
         const val DEFAULT_MARKERS = "ad\nadvertisement\nsponsored\nad 1 of\nskip ad"
         val DEFAULT_MARKER_SET: Set<String> = DEFAULT_MARKERS.lineSequence().toSet()
         const val DEFAULT_SCAN_INTERVAL = 2.0
+        const val DEFAULT_CONFIDENCE_THRESHOLD = 0.5f
     }
 }

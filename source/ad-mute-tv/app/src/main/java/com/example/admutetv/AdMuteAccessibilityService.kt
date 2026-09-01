@@ -73,7 +73,8 @@ class AdMuteAccessibilityService : AccessibilityService() {
         val evidence = detector.inspect(
             root = rootInActiveWindow,
             eventTexts = event.text.toList(),
-            markers = settings.markers
+            markers = settings.markers,
+            packageName = foregroundPackage
         )
 
         if (evidence.isAdLikely) {
@@ -215,7 +216,8 @@ class AdMuteAccessibilityService : AccessibilityService() {
             val evidence = detector.inspect(
                 root = root,
                 eventTexts = emptyList(),
-                markers = settings.markers
+                markers = settings.markers,
+                packageName = packageName
             )
 
             totalNodes += evidence.inspectedNodeCount
@@ -223,7 +225,7 @@ class AdMuteAccessibilityService : AccessibilityService() {
                 sampleText = evidence.sampleText
             }
 
-            if (evidence.isAdLikely) {
+            if (evidence.isAdLikely && evidence.confidence >= settings.confidenceThreshold) {
                 foundAd = true
                 matchedLabels = evidence.matchedLabels
                 detectedPackage = packageName

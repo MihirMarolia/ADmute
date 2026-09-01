@@ -2,6 +2,8 @@ package com.example.admutetv
 
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.BroadcastReceiver
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
@@ -33,6 +35,7 @@ class MainActivity : android.app.Activity() {
     private lateinit var idMarkersInput: EditText
     private lateinit var delayInput: EditText
     private lateinit var scanIntervalInput: EditText
+    private lateinit var confidenceInput: EditText
     private lateinit var serviceState: TextView
     private lateinit var liveStatus: TextView
     private lateinit var activityLogText: TextView
@@ -128,8 +131,9 @@ class MainActivity : android.app.Activity() {
         verboseToggle = addCheckBox("Verbose diagnostics") {}
 
         addText("Ad labels to match", 20f, Color.WHITE, 28)
-        addText("One phrase per line. Keep phrases specific to avoid accidental mutes.", 15f, SECONDARY_COLOR, 4)
-        markersInput = addMultilineInput("ad\nadvertisement\nsponsored\nad 1 of\nskip ad", 110)
+        addText("Advanced patterns supported: /regex/ for regex, *wildcard*, package##pattern for app-specific rules.", 15f, SECONDARY_COLOR, 4)
+        addText("Examples: /ad.*[0-9]+s/, *skip*, com.youtube.android##ad 1 of", 15f, SECONDARY_COLOR, 2)
+        markersInput = addMultilineInput("ad\nadvertisement\nsponsored\nad 1 of\nskip ad\n/ad.*[0-9]+s/\n*skip*", 110)
 
         addText("Only watch these app packages", 20f, Color.WHITE, 24)
         addText("Used only when “Watch all foreground apps” is off. One Android package name per line.", 15f, SECONDARY_COLOR, 4)
@@ -164,6 +168,19 @@ class MainActivity : android.app.Activity() {
         addText("View ID markers", 20f, Color.WHITE, 24)
         addText("Optional: Android view IDs that often contain ads (e.g., 'ad_banner', 'promo'). One per line.", 15f, SECONDARY_COLOR, 4)
         idMarkersInput = addMultilineInput("", 60)
+
+        addText("Confidence threshold", 20f, Color.WHITE, 24)
+        addText("Minimum confidence (0.0-1.0) required to mute. Higher values reduce false positives.", 15f, SECONDARY_COLOR, 4)
+        confidenceInput = EditText(this).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setTextColor(Color.WHITE)
+            setHintTextColor(SECONDARY_COLOR)
+            hint = "0.5"
+            textSize = 18f
+            setSelectAllOnFocus(true)
+            setSingleLine(true)
+        }
+        addView(confidenceInput, 6)
 
         addButton("Save configuration") {
             settingsRepository.save(currentSettings(enabled = automationToggle.isChecked))
@@ -212,6 +229,79 @@ class MainActivity : android.app.Activity() {
         
         addView(logButtonsLayout, 8)
 
+        addText("Filter list management", 20f, Color.WHITE, 28)
+        addText("Import/export filter lists in EasyList-compatible format.", 15f, SECONDARY_COLOR, 4)
+        
+        val filterListButtonsLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+        }
+        
+        Button(this).apply {
+            text = "Export filter list"
+            textSize = 15f
+            isAllCaps = false
+            setOnClickListener { 
+                exportFilterList()
+            }
+            filterListButtonsLayout.addView(this, LinearLayout.LayoutParams(WRAP, WRAP).apply {
+                rightMargin = dp(12)
+            })
+        }
+        
+        Button(this).apply {
+            text = "Import filter list"
+            textSize = 15f
+            isAllCaps = false
+            setOnClickListener { 
+                importFilterList()
+            }
+            filterListButtonsLayout.addView(this, LinearLayout.LayoutParams(WRAP, WRAP))
+        }
+        
+        addView(filterListButtonsLayout, 8)
+
+        addText("Pattern test", 20f, Color.WHITE, 28)
+        addText("Test your patterns against sample text to verify they work as expected.", 15f, SECONDARY_COLOR, 4)
+        
+        val testInput = EditText(this).apply {
+            setTextColor(Color.WHITE)
+            setHintTextColor(SECONDARY_COLOR)
+            hint = "Enter text to test (e.g., 'Skip ad in 5 seconds')"
+            textSize = 16f
+            setSingleLine(true)
+        }
+        addView(testInput, 4)
+        
+        val testResultView = addText("No test performed yet", 16f, SECONDARY_COLOR, 4)
+        
+        Button(this).apply {
+            text = "Test patterns"
+            textSize = 15f
+            isAllCaps = false
+            setOnClickListener {
+                val testText = testInput.text.toString()
+                if (testText.isNotBlank()) {
+                    val rules = FilterRule.parseAll(markersInput.text.lineSequence().toList())
+                    val matches = rules.filter { it.matches(testText) }
+                    if (matches.isNotEmpty()) {
+                        val matchDetails = matches.joinToString(", ") { 
+                            "${it.originalPattern} (${(it.confidence * 100).toInt()}%)" 
+                        }
+                        testResultView.text = "MATCHED: $matchDetails"
+                        testResultView.setTextColor(READY_COLOR)
+                    } else {
+                        testResultView.text = "No patterns matched"
+                        testResultView.setTextColor(MUTED_COLOR)
+                    }
+                } else {
+                    testResultView.text = "Enter text to test"
+                    testResultView.setTextColor(SECONDARY_COLOR)
+                }
+            }
+            addView(this, 8)
+        }
+
         liveStatus = addText("STATUS: WAITING\nOpen Accessibility settings to enable AdMute TV.", 17f, READY_COLOR, 28)
         addText(
             "Safety behavior: this app records the media volume before it mutes. It restores that level only if it changed it; if media volume is non-zero at restore time, your newer volume choice is left intact.",
@@ -234,6 +324,7 @@ class MainActivity : android.app.Activity() {
         delayInput.setText((settings.resumeDelayMs / 1_000.0).toString())
         scanIntervalInput.setText(settings.scanInterval.toString())
         idMarkersInput.setText(settings.idMarkers.joinToString("\n"))
+        confidenceInput.setText(settings.confidenceThreshold.toString())
         renderingSettings = false
     }
 
@@ -246,6 +337,9 @@ class MainActivity : android.app.Activity() {
         val scanInterval = scanIntervalInput.text.toString().toDoubleOrNull()
             ?.coerceIn(0.5, 10.0)
             ?: SettingsRepository.DEFAULT_SCAN_INTERVAL
+        val confidence = confidenceInput.text.toString().toDoubleOrNull()
+            ?.coerceIn(0.0, 1.0)
+            ?: SettingsRepository.DEFAULT_CONFIDENCE_THRESHOLD
         return SettingsRepository.AppSettings(
             enabled = enabled,
             watchAllApps = allAppsToggle.isChecked,
@@ -255,7 +349,8 @@ class MainActivity : android.app.Activity() {
             showOverlay = overlayToggle.isChecked,
             scanInterval = scanInterval,
             verboseDiagnostics = verboseToggle.isChecked,
-            idMarkers = idMarkersInput.text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+            idMarkers = idMarkersInput.text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toSet(),
+            confidenceThreshold = confidence
         )
     }
 
@@ -334,5 +429,50 @@ class MainActivity : android.app.Activity() {
         val diagnosticsLog = DiagnosticsLog(this)
         diagnosticsLog.clear()
         activityLogText.setText("No activity recorded yet...")
+    }
+
+    private fun exportFilterList() {
+        val currentMarkers = markersInput.text.toString()
+        val filterList = buildString {
+            appendLine("# ADmute TV Filter List")
+            appendLine("# Exported: ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())}")
+            appendLine("# Format: Simple text, /regex/, *wildcard*, or package##pattern")
+            appendLine()
+            append(currentMarkers)
+        }
+        
+        // Copy to clipboard
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clip = ClipData.newPlainText("ADmute Filter List", filterList)
+        clipboard.setPrimaryClip(clip)
+        
+        liveStatus.text = "STATUS: FILTER LIST COPIED\nFilter list copied to clipboard. Paste to save or share."
+        liveStatus.setTextColor(READY_COLOR)
+    }
+
+    private fun importFilterList() {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        val clipData = clipboard.primaryClip
+        
+        if (clipData != null && clipData.itemCount > 0) {
+            val text = clipData.getItemAt(0).text?.toString()
+            if (text != null) {
+                // Filter out comments and empty lines
+                val filteredLines = text.lineSequence()
+                    .filter { !it.trim().startsWith("#") }
+                    .filter { it.trim().isNotEmpty() }
+                    .joinToString("\n")
+                
+                markersInput.setText(filteredLines)
+                liveStatus.text = "STATUS: FILTER LIST IMPORTED\nFilter list imported from clipboard. Review and save."
+                liveStatus.setTextColor(READY_COLOR)
+            } else {
+                liveStatus.text = "STATUS: IMPORT FAILED\nClipboard is empty or contains no text."
+                liveStatus.setTextColor(MUTED_COLOR)
+            }
+        } else {
+            liveStatus.text = "STATUS: IMPORT FAILED\nClipboard is empty."
+            liveStatus.setTextColor(MUTED_COLOR)
+        }
     }
 }

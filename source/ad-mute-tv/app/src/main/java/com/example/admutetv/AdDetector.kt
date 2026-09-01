@@ -15,32 +15,47 @@ internal class AdDetector {
         val isAdLikely: Boolean,
         val matchedLabels: List<String>,
         val inspectedNodeCount: Int,
-        val sampleText: String = ""
+        val sampleText: String = "",
+        val confidence: Float = 1.0f
+    )
+    
+    data class MatchResult(
+        val matches: Boolean,
+        val matchedPattern: String,
+        val confidence: Float
     )
 
     fun inspect(
         root: AccessibilityNodeInfo?,
         eventTexts: List<CharSequence?>,
-        markers: Set<String>
+        markers: Set<String>,
+        packageName: String? = null
     ): Match {
-        val normalizedMarkers = markers
-            .map(::normalize)
-            .filter { it.isNotBlank() }
-            .toSet()
-
-        if (normalizedMarkers.isEmpty()) {
-            return Match(false, emptyList(), 0)
+        // Parse markers into FilterRule objects
+        val filterRules = FilterRule.parseAll(markers.toList())
+        
+        if (filterRules.isEmpty()) {
+            return Match(false, emptyList(), 0, 0.0f)
         }
 
         val found = linkedSetOf<String>()
         val textSamples = mutableListOf<String>()
+        var totalConfidence = 0.0f
+        var matchCount = 0
+        
         eventTexts.forEach { text -> 
-            matchText(text, normalizedMarkers, found)
+            val matchResult = matchTextWithRules(text, filterRules, packageName)
+            if (matchResult.matches) {
+                found.add(matchResult.matchedPattern)
+                totalConfidence += matchResult.confidence
+                matchCount++
+            }
             if (!text.isNullOrEmpty()) textSamples.add(text.toString())
         }
 
         if (root == null) {
-            return Match(found.isNotEmpty(), found.toList(), 0, textSamples.take(3).joinToString(" | "))
+            val avgConfidence = if (matchCount > 0) totalConfidence / matchCount else 0.0f
+            return Match(found.isNotEmpty(), found.toList(), 0, textSamples.take(3).joinToString(" | "), avgConfidence)
         }
 
         val queue = ArrayDeque<AccessibilityNodeInfo>()
@@ -52,9 +67,26 @@ internal class AdDetector {
             val node = queue.removeFirst()
             inspected += 1
 
-            matchText(node.text, normalizedMarkers, found)
-            matchText(node.contentDescription, normalizedMarkers, found)
-            matchText(node.hintText, normalizedMarkers, found)
+            val textResult = matchTextWithRules(node.text, filterRules, packageName)
+            if (textResult.matches) {
+                found.add(textResult.matchedPattern)
+                totalConfidence += textResult.confidence
+                matchCount++
+            }
+            
+            val descResult = matchTextWithRules(node.contentDescription, filterRules, packageName)
+            if (descResult.matches) {
+                found.add(descResult.matchedPattern)
+                totalConfidence += descResult.confidence
+                matchCount++
+            }
+            
+            val hintResult = matchTextWithRules(node.hintText, filterRules, packageName)
+            if (hintResult.matches) {
+                found.add(hintResult.matchedPattern)
+                totalConfidence += hintResult.confidence
+                matchCount++
+            }
             
             // Collect text samples for debugging
             if (textSamples.size < 5) {
@@ -67,35 +99,31 @@ internal class AdDetector {
             }
         }
 
-        return Match(found.isNotEmpty(), found.toList(), inspected, textSamples.take(3).joinToString(" | "))
+        val avgConfidence = if (matchCount > 0) totalConfidence / matchCount else 0.0f
+        return Match(found.isNotEmpty(), found.toList(), inspected, textSamples.take(3).joinToString(" | "), avgConfidence)
     }
 
-    private fun matchText(
+    private fun matchTextWithRules(
         value: CharSequence?,
-        markers: Set<String>,
-        found: MutableSet<String>
-    ) {
-        val candidate = normalize(value?.toString().orEmpty())
-        if (candidate.isBlank()) return
-
-        markers.forEach { marker ->
-            if (matchesMarker(candidate, marker)) found.add(marker)
+        rules: List<FilterRule>,
+        packageName: String?
+    ): MatchResult {
+        val text = value?.toString() ?: return MatchResult(false, "", 0.0f)
+        if (text.isBlank()) return MatchResult(false, "", 0.0f)
+        
+        // Try each rule, return first match
+        for (rule in rules) {
+            if (!rule.appliesToPackage(packageName)) continue
+            
+            if (rule.matches(text)) {
+                return MatchResult(true, rule.originalPattern, rule.confidence)
+            }
         }
+        
+        return MatchResult(false, "", 0.0f)
     }
-
-    private fun matchesMarker(candidate: String, marker: String): Boolean {
-        if (marker.contains(' ')) return candidate.contains(marker)
-
-        // Single-word matching avoids treating words such as "additional" as "ad".
-        return candidate.split(NON_ALPHANUMERIC).any { token -> token == marker }
-    }
-
-    private fun normalize(value: String): String =
-        value.lowercase(Locale.ROOT).trim().replace(WHITESPACE, " ")
 
     private companion object {
         private const val MAX_NODES_TO_INSPECT = 240
-        private val WHITESPACE = Regex("\\s+")
-        private val NON_ALPHANUMERIC = Regex("[^\\p{L}\\p{N}]+")
     }
 }
