@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AdMute TV</string>
+    <string name="accessibility_service_description">Optionally mutes device media volume when configured on-screen ad labels are exposed by a foreground app. It restores the saved level when the label disappears or you turn it off.</string>
+</resources>
