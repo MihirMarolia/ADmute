@@ -114,7 +114,7 @@ class MainActivity : android.app.Activity() {
 
         serviceState = addText("", 18f, Color.WHITE, 28)
         addButton("Open Accessibility settings") {
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            openAccessibilitySettings()
         }
 
         automationToggle = addCheckBox("Enable automatic mute") {
@@ -138,6 +138,8 @@ class MainActivity : android.app.Activity() {
                     "STATUS: FORCE MUTE DISABLED\nNormal volume checking enabled"
                 }
                 liveStatus.setTextColor(if (it) MUTED_COLOR else READY_COLOR)
+                // Immediately apply force mute setting
+                sendBroadcast(StatusContract.settingsChangedIntent(this))
             }
         }
 
@@ -211,6 +213,7 @@ com.tubi.tv##/ad.*[0-9]+s/""", 130)
 
         addButton("Save configuration") {
             settingsRepository.save(currentSettings(enabled = automationToggle.isChecked))
+            sendBroadcast(StatusContract.settingsChangedIntent(this))
             liveStatus.text = "STATUS: SAVED\nSettings will be used for the next accessibility event."
             liveStatus.setTextColor(READY_COLOR)
             refreshServiceState()
@@ -458,6 +461,35 @@ com.tubi.tv##/ad.*[0-9]+s/""", 130)
         val diagnosticsLog = DiagnosticsLog(this)
         diagnosticsLog.clear()
         activityLogText.setText("No activity recorded yet...")
+    }
+
+    private fun openAccessibilitySettings() {
+        try {
+            // Try Android TV specific accessibility settings
+            val intent = Intent("android.settings.ACCESSIBILITY_SETTINGS")
+            intent.addCategory(Intent.CATEGORY_DEFAULT)
+            intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            startActivity(intent)
+        } catch (e: Exception) {
+            try {
+                // Fallback to standard accessibility settings
+                val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                startActivity(intent)
+            } catch (e2: Exception) {
+                // Final fallback to main settings with instructions
+                try {
+                    val intent = Intent(Settings.ACTION_SETTINGS)
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    startActivity(intent)
+                    liveStatus.text = "STATUS: NAVIGATE TO ACCESSIBILITY\nGo to Settings → Accessibility → AdMute TV"
+                    liveStatus.setTextColor(READY_COLOR)
+                } catch (e3: Exception) {
+                    liveStatus.text = "STATUS: UNABLE TO OPEN SETTINGS\nPlease manually go to TV Settings → Accessibility"
+                    liveStatus.setTextColor(MUTED_COLOR)
+                }
+            }
+        }
     }
 
     private fun exportFilterList() {

@@ -54,7 +54,10 @@ class AdMuteAccessibilityService : AccessibilityService() {
         ContextCompat.registerReceiver(
             this,
             commandReceiver,
-            IntentFilter(StatusContract.ACTION_RESTORE_NOW),
+            IntentFilter().apply {
+                addAction(StatusContract.ACTION_RESTORE_NOW)
+                addAction(StatusContract.ACTION_SETTINGS_CHANGED)
+            },
             ContextCompat.RECEIVER_NOT_EXPORTED
         )
         commandReceiverRegistered = true
