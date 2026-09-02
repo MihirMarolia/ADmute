@@ -31,6 +31,11 @@ class AdMuteAccessibilityService : AccessibilityService() {
             if (intent.action == StatusContract.ACTION_RESTORE_NOW && ::volumeController.isInitialized) {
                 cancelPendingRestore()
                 restoreAndReport("Manual restore requested")
+            } else if (intent.action == StatusContract.ACTION_SETTINGS_CHANGED && ::volumeController.isInitialized) {
+                // Reload settings to apply force mute change
+                val settings = settingsRepository.load()
+                volumeController.setForceMute(settings.forceMute)
+                android.util.Log.d("AdMute", "Settings reloaded, force mute: ${settings.forceMute}")
             }
         }
     }
@@ -41,6 +46,11 @@ class AdMuteAccessibilityService : AccessibilityService() {
         volumeController = MediaVolumeController(this)
         statusOverlay = StatusOverlay(this)
         diagnosticsLog = DiagnosticsLog(this)
+        
+        // Apply force mute setting
+        val settings = settingsRepository.load()
+        volumeController.setForceMute(settings.forceMute)
+        
         ContextCompat.registerReceiver(
             this,
             commandReceiver,

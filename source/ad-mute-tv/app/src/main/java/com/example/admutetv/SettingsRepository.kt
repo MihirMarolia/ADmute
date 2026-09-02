@@ -19,7 +19,8 @@ internal class SettingsRepository(context: Context) {
         scanInterval = preferences.getFloat(KEY_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL).toDouble(),
         verboseDiagnostics = preferences.getBoolean(KEY_VERBOSE_DIAGNOSTICS, false),
         idMarkers = splitLines(preferences.getString(KEY_ID_MARKERS, "").orEmpty()),
-        confidenceThreshold = preferences.getFloat(KEY_CONFIDENCE_THRESHOLD, DEFAULT_CONFIDENCE_THRESHOLD).toDouble()
+        confidenceThreshold = preferences.getFloat(KEY_CONFIDENCE_THRESHOLD, DEFAULT_CONFIDENCE_THRESHOLD).toDouble(),
+        forceMute = preferences.getBoolean(KEY_FORCE_MUTE, false)
     )
 
     fun save(settings: AppSettings) {
@@ -34,6 +35,7 @@ internal class SettingsRepository(context: Context) {
             .putBoolean(KEY_VERBOSE_DIAGNOSTICS, settings.verboseDiagnostics)
             .putString(KEY_ID_MARKERS, settings.idMarkers.joinToString("\n"))
             .putFloat(KEY_CONFIDENCE_THRESHOLD, settings.confidenceThreshold.toFloat())
+            .putBoolean(KEY_FORCE_MUTE, settings.forceMute)
             .apply()
     }
 
@@ -57,7 +59,8 @@ internal class SettingsRepository(context: Context) {
         val scanInterval: Double = DEFAULT_SCAN_INTERVAL,
         val verboseDiagnostics: Boolean = false,
         val idMarkers: Set<String> = emptySet(),
-        val confidenceThreshold: Double = DEFAULT_CONFIDENCE_THRESHOLD
+        val confidenceThreshold: Double = DEFAULT_CONFIDENCE_THRESHOLD,
+        val forceMute: Boolean = false
     ) {
         fun appliesTo(packageName: String?): Boolean =
             watchAllApps || (packageName != null && packageName in packageNames)
@@ -75,9 +78,26 @@ internal class SettingsRepository(context: Context) {
         private const val KEY_VERBOSE_DIAGNOSTICS = "verbose_diagnostics"
         private const val KEY_ID_MARKERS = "id_markers"
         private const val KEY_CONFIDENCE_THRESHOLD = "confidence_threshold"
+        private const val KEY_FORCE_MUTE = "force_mute"
 
         const val DEFAULT_RESUME_DELAY_MS = 1_800L
-        const val DEFAULT_MARKERS = "ad\nadvertisement\nsponsored\nad 1 of\nskip ad"
+        const val DEFAULT_MARKERS = """ad
+advertisement
+sponsored
+ad 1 of
+skip ad
+/ad.*[0-9]+s/
+*skip*
+com.google.android.youtube##ad 1 of
+com.google.android.youtube##skip ad
+com.google.android.youtube##/advertisement.*[0-9]+s/
+com.plexapp.android##advertisement
+com.plexapp.android##sponsored
+com.plexapp.android##/ad.*[0-9]+s/
+com.tubi.tv##advertisement
+com.tubi.tv##sponsored
+com.tubi.tv##skip ad
+com.tubi.tv##/ad.*[0-9]+s/"""
         val DEFAULT_MARKER_SET: Set<String> = DEFAULT_MARKERS.lineSequence().toSet()
         const val DEFAULT_SCAN_INTERVAL = 2.0
         const val DEFAULT_CONFIDENCE_THRESHOLD = 0.5f

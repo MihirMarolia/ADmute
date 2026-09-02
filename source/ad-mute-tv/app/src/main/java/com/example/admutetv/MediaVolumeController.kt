@@ -12,23 +12,44 @@ internal class MediaVolumeController(context: Context) {
 
     private var savedMusicVolume: Int? = null
     private var changedVolume = false
+    private var forceMuteEnabled = false
 
     val isMutedByUs: Boolean
         get() = changedVolume
+    
+    fun setForceMute(enabled: Boolean) {
+        forceMuteEnabled = enabled
+    }
 
     fun mute(): Result {
         if (audioManager.isVolumeFixed) return Result.FixedVolumeDevice
         if (changedVolume) return Result.AlreadyMutedByUs
 
         val current = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-        if (current <= 0) return Result.AlreadyMutedExternally
+        val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        
+        // Enhanced logging
+        android.util.Log.d("AdMute", "Mute attempt - Current volume: $current/$maxVolume, Fixed: ${audioManager.isVolumeFixed}, Force: $forceMuteEnabled")
+        
+        // Skip the "already muted" check if force mute is enabled
+        if (!forceMuteEnabled && current <= 0) {
+            android.util.Log.d("AdMute", "Volume already muted externally (current: $current)")
+            return Result.AlreadyMutedExternally
+        }
 
         savedMusicVolume = current
+        android.util.Log.d("AdMute", "Setting volume to 0, saved: $savedMusicVolume")
+        
         audioManager.setStreamVolume(
             AudioManager.STREAM_MUSIC,
             0,
             0 // Avoid displaying a system volume panel over playback.
         )
+        
+        // Verify the mute worked
+        val afterMute = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+        android.util.Log.d("AdMute", "After mute attempt - Volume: $afterMute")
+        
         changedVolume = true
         return Result.Muted(current)
     }

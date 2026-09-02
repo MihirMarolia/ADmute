@@ -30,6 +30,7 @@ class MainActivity : android.app.Activity() {
     private lateinit var allAppsToggle: CheckBox
     private lateinit var overlayToggle: CheckBox
     private lateinit var verboseToggle: CheckBox
+    private lateinit var forceMuteToggle: CheckBox
     private lateinit var markersInput: EditText
     private lateinit var packagesInput: EditText
     private lateinit var idMarkersInput: EditText
@@ -129,11 +130,37 @@ class MainActivity : android.app.Activity() {
         }
         overlayToggle = addCheckBox("Show small MUTE status overlay") {}
         verboseToggle = addCheckBox("Verbose diagnostics") {}
+        forceMuteToggle = addCheckBox("Force mute (bypass volume checks)") {
+            if (!renderingSettings) {
+                liveStatus.text = if (it) {
+                    "STATUS: FORCE MUTE ENABLED\nWill mute even if volume appears already muted"
+                } else {
+                    "STATUS: FORCE MUTE DISABLED\nNormal volume checking enabled"
+                }
+                liveStatus.setTextColor(if (it) MUTED_COLOR else READY_COLOR)
+            }
+        }
 
         addText("Ad labels to match", 20f, Color.WHITE, 28)
         addText("Advanced patterns supported: /regex/ for regex, *wildcard*, package##pattern for app-specific rules.", 15f, SECONDARY_COLOR, 4)
-        addText("Examples: /ad.*[0-9]+s/, *skip*, com.youtube.android##ad 1 of", 15f, SECONDARY_COLOR, 2)
-        markersInput = addMultilineInput("ad\nadvertisement\nsponsored\nad 1 of\nskip ad\n/ad.*[0-9]+s/\n*skip*", 110)
+        addText("Examples: /ad.*[0-9]+s/, *skip*, com.google.android.youtube##ad 1 of", 15f, SECONDARY_COLOR, 2)
+        markersInput = addMultilineInput("""ad
+advertisement
+sponsored
+ad 1 of
+skip ad
+/ad.*[0-9]+s/
+*skip*
+com.google.android.youtube##ad 1 of
+com.google.android.youtube##skip ad
+com.google.android.youtube##/advertisement.*[0-9]+s/
+com.plexapp.android##advertisement
+com.plexapp.android##sponsored
+com.plexapp.android##/ad.*[0-9]+s/
+com.tubi.tv##advertisement
+com.tubi.tv##sponsored
+com.tubi.tv##skip ad
+com.tubi.tv##/ad.*[0-9]+s/""", 130)
 
         addText("Only watch these app packages", 20f, Color.WHITE, 24)
         addText("Used only when “Watch all foreground apps” is off. One Android package name per line.", 15f, SECONDARY_COLOR, 4)
@@ -318,6 +345,7 @@ class MainActivity : android.app.Activity() {
         allAppsToggle.isChecked = settings.watchAllApps
         overlayToggle.isChecked = settings.showOverlay
         verboseToggle.isChecked = settings.verboseDiagnostics
+        forceMuteToggle.isChecked = settings.forceMute
         markersInput.setText(settings.markers.joinToString("\n"))
         packagesInput.setText(settings.packageNames.joinToString("\n"))
         packagesInput.visibility = if (settings.watchAllApps) View.GONE else View.VISIBLE
@@ -350,7 +378,8 @@ class MainActivity : android.app.Activity() {
             scanInterval = scanInterval,
             verboseDiagnostics = verboseToggle.isChecked,
             idMarkers = idMarkersInput.text.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toSet(),
-            confidenceThreshold = confidence
+            confidenceThreshold = confidence,
+            forceMute = forceMuteToggle.isChecked
         )
     }
 
