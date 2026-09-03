@@ -7,8 +7,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Color
+import android.net.Uri
 import android.net.VpnService
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
 import android.text.InputType
 import android.view.Gravity
@@ -37,6 +39,7 @@ class MainActivity : android.app.Activity() {
     private lateinit var delayInput: EditText
     private lateinit var scanIntervalInput: EditText
     private lateinit var serviceState: TextView
+    private lateinit var batteryState: TextView
     private lateinit var liveStatus: TextView
     private lateinit var diagnosticsView: TextView
     private var receiverRegistered = false
@@ -123,6 +126,17 @@ class MainActivity : android.app.Activity() {
         addButton("Open Accessibility settings") {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }
+
+        batteryState = addText("", 15f, SECONDARY_COLOR, 4)
+        addButton("Exempt from background restrictions") {
+            requestIgnoreBatteryOptimizations()
+        }
+        addText(
+            "Some TVs freeze or restart background services to save memory, which can pause detection for a few seconds at a time. This exemption keeps the service running steadily. It has nothing to do with battery — Android reuses the same setting for background-process management.",
+            15f,
+            SECONDARY_COLOR,
+            4
+        )
 
         automationToggle = addCheckBox("Enable automatic mute") {
             if (!renderingSettings) {
@@ -299,6 +313,33 @@ class MainActivity : android.app.Activity() {
             "Accessibility service: OFF — select “Open Accessibility settings”, then enable AdMute TV"
         }
         serviceState.setTextColor(if (connected) READY_COLOR else Color.rgb(255, 183, 77))
+
+        val exempt = getSystemService(PowerManager::class.java).isIgnoringBatteryOptimizations(packageName)
+        batteryState.text = if (exempt) {
+            "Background restrictions: EXEMPT"
+        } else {
+            "Background restrictions: NOT EXEMPT — select “Exempt from background restrictions” for steadier detection"
+        }
+        batteryState.setTextColor(if (exempt) READY_COLOR else Color.rgb(255, 183, 77))
+    }
+
+    private fun requestIgnoreBatteryOptimizations() {
+        val powerManager = getSystemService(PowerManager::class.java)
+        if (powerManager.isIgnoringBatteryOptimizations(packageName)) return
+        runCatching {
+            startActivity(
+                Intent(
+                    Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:$packageName")
+                )
+            )
+        }.onFailure {
+            // Some OEM builds disable this screen too; fall back to the general list
+            // where the user can find AdMute TV and exempt it manually.
+            runCatching {
+                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            }
+        }
     }
 
     private fun addCheckBox(label: String, onChanged: (Boolean) -> Unit): CheckBox =

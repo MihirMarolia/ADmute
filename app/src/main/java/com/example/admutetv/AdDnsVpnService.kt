@@ -112,8 +112,13 @@ class AdDnsVpnService : VpnService() {
     }
 
     private fun forward(query: IpV4UdpPacket, output: FileOutputStream) {
-        val socket = DatagramSocket()
+        // Socket creation itself can fail (for example when another VPN app on
+        // the device enforces a system-wide "block connections without VPN"
+        // policy), so it must be inside the try block: an uncaught exception
+        // here would otherwise crash this service's whole host process.
+        var socket: DatagramSocket? = null
         try {
+            socket = DatagramSocket()
             // Keep the forwarded lookup outside of this tunnel to avoid a loop.
             protect(socket)
             socket.soTimeout = UPSTREAM_TIMEOUT_MS
@@ -130,7 +135,7 @@ class AdDnsVpnService : VpnService() {
         } catch (_: Exception) {
             // A dropped lookup is retried by the querying application itself.
         } finally {
-            socket.close()
+            runCatching { socket?.close() }
         }
     }
 
