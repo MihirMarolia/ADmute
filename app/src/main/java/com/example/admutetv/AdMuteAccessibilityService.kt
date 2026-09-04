@@ -156,10 +156,23 @@ class AdMuteAccessibilityService : AccessibilityService() {
             }
             screen.packageName?.let { lastPackageName = it }
 
-            when (volumeController.mute()) {
+            when (val result = volumeController.mute()) {
                 is MediaVolumeController.Result.Muted -> {
-                    DiagnosticsLog.add("mute: ${lastPackageName ?: "foreground app"} — $source")
-                    publishStatus("Muted media volume — $source", true, settings.showOverlay)
+                    if (result.externalAudioRoute) {
+                        DiagnosticsLog.add(
+                            "mute: ${lastPackageName ?: "foreground app"} — $source " +
+                                "(audio may be routed to an external HDMI/ARC device — not guaranteed to be heard)"
+                        )
+                        publishStatus(
+                            "Muted (device volume) — $source. Audio is routed over HDMI; " +
+                                "an external soundbar/receiver may not have muted.",
+                            true,
+                            settings.showOverlay
+                        )
+                    } else {
+                        DiagnosticsLog.add("mute: ${lastPackageName ?: "foreground app"} — $source")
+                        publishStatus("Muted media volume — $source", true, settings.showOverlay)
+                    }
                 }
                 MediaVolumeController.Result.AlreadyMutedByUs ->
                     publishStatus("Muted media volume — $source", true, settings.showOverlay)
