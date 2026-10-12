@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">ADMute</string>
+    <string name="service_description">Helps people with sensory sensitivities by muting recognized ads and optionally covering them with a dark, still texture in YouTube, Tubi, and Plex. Reads on-screen accessibility labels locally; no recordings or uploads. Double-press Back to release protection and pause it for one minute. Detection may miss ads and is not a guarantee against flashes.</string>
+    <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowBackground">#101318</item>
+        <item name="android:colorAccent">#9FCDBD</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>
