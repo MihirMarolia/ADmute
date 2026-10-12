@@ -6,7 +6,7 @@ Repository: [MihirMarolia/ADmute](https://github.com/MihirMarolia/ADmute). The r
 
 The new application ID is `org.admute`; the earlier app used `com.example.admutetv`. This installs alongside the earlier app. **Disable the old AdMute TV accessibility service before enabling this one**, so two services do not compete over the shared media volume. Old settings are not imported.
 
-**Status: initial device-test build, not yet validated against live versions of these three apps.** Allowlisting an app is not proof that its accessibility tree exposes usable ad labels. Custom video players, languages, or changed layouts can prevent detection. This app cannot guarantee protection from loud audio or flashing imagery, including the start of an ad before its label appears.
+**Status: YouTube ad detection failed in the first TCL Android 11 device test. Version 0.1.1 is a diagnostic follow-up, not a verified fix.** See [the device findings](docs/TCL_TEST_2026-10-12.md). Allowlisting an app is not proof that its accessibility tree exposes usable ad labels. Custom video players, languages, or changed layouts can prevent detection. This app cannot guarantee protection from loud audio or flashing imagery, including the start of an ad before its label appears.
 
 ## Install and use
 
@@ -16,7 +16,7 @@ The new application ID is `org.admute`; the earlier app used `com.example.admute
 4. Test one full ad break per app at a comfortable baseline volume. Opening a movie, browsing, and trailers must remain uncovered.
 5. During a false trigger, **press Back twice within 0.8 seconds** to release protection and pause for one minute. These presses still reach the streaming app and may navigate back. Home / leaving the app also releases protection. If key filtering is unavailable because of device behavior or another accessibility service, use Home and the ADMute pause button.
 
-The dark texture is drawn locally and never animates. **Preview dark texture** lets you inspect it without affecting sound. No internet permission, analytics, accounts, screen capture, OCR, ad skipping, or external image assets are used. Accessibility access is broad enough to observe foreground changes, but text traversal occurs only in selected apps. Screen labels remain in memory only. The detection check retains an app package, count, completeness flag, and evidence category, never titles or screen text.
+The dark texture is drawn locally and never animates. **Preview dark texture** lets you inspect it without affecting sound. No internet permission, analytics, accounts, OCR, ad skipping, or external image assets are used. Release builds do not request screenshot capability. Debug builds allow an explicit developer screenshot probe; pixels are discarded after calculating brightness counts. There is no continuous capture, recording, image storage, or upload. Accessibility access is broad enough to observe foreground changes, but text traversal occurs only in selected apps. Screen labels remain in memory only. The detection check retains an app package, count, completeness flag, and evidence category, never titles or screen text. Debug event diagnostics retain only known marker categories and counts in memory.
 
 ## Build
 
@@ -28,10 +28,12 @@ Use JDK 17, Android SDK platform 35, and build-tools 35.0.0. The Gradle wrapper 
 
 APK: `app/build/outputs/apk/debug/app-debug.apk`. This is a debug-signed test build. Production signing and store publication are separate release work. CI repeats unit tests, lint, and APK assembly on changes.
 
+A local `.signing/debug.keystore`, if present, is reused for test builds and ignored by Git. Preserve this local key to update an installed test APK without losing its signature. CI artifacts use the runner's debug key and may require reinstalling an earlier test build; they are not production-signed releases. Never commit signing keys.
+
 ## Reliability model
 
 - Fresh accessibility trees, rather than stale event text, drive detection. Reads are bounded; selected apps are polled every 350 ms.
-- Specific anchored labels need a player/control context. Bare `Ad`, `Sponsored`, `Skip intro`, titles, descriptions, and recommendation containers do not qualify.
+- Specific anchored labels need a player/control context. YouTube also recognizes the user-observed pair `Sponsored` + `Send to phone` in eligible fresh labels. Either label alone, bare `Ad`, `Skip intro`, titles, descriptions, and recommendation containers do not qualify.
 - Two positive samples separated by at least 300 ms confirm an ad. Confirmed clear reads need 1.5 seconds to release, bridging short gaps within a pod. Missing active roots or leaving a selected app release immediately.
 - Incomplete reads within the same known app allow at most 8 seconds since the last positive evidence. A 3-minute maximum never extends while labels stay present. Timeout releases require stable clear evidence before another ad can trigger.
 - The original media volume is stored before changing it to zero. Repeated detections never overwrite it. On release, restore only if the volume is still the zero ADMute wrote. A nonzero user adjustment is respected and not muted again within that session. Already-silent devices stay silent.

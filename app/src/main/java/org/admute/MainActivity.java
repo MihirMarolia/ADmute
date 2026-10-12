@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.ApplicationInfo;
 import android.graphics.Color;
 import android.os.Bundle;
 import android.os.Handler;
@@ -52,7 +53,10 @@ public final class MainActivity extends Activity {
         toggle(panel, "Plex", AdDetector.PLEX);
         button(panel, "Enable accessibility service", view -> new AlertDialog.Builder(this)
                 .setTitle("Enable ad comfort")
-                .setMessage("ADMute reads on-screen accessibility labels to recognize ad breaks in your selected apps. All processing stays on this TV; no screen recordings, accounts, or uploads. It can control media volume and show a dark cover. In the next screen, select ADMute and enable it.")
+                .setMessage("ADMute reads on-screen accessibility labels to recognize ad breaks in your selected apps. All processing stays on this TV; no screen recordings, accounts, or uploads. It can control media volume and show a dark cover. "
+                        + (((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0)
+                        ? "This debug build also allows an explicit developer screenshot probe; pixels are discarded and only brightness counts remain. " : "")
+                        + "In the next screen, select ADMute and enable it.")
                 .setPositiveButton("Open settings", (dialog, which) -> {
                     try { startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); }
                     catch (RuntimeException e) { new AlertDialog.Builder(this).setMessage("Open TV Settings → Accessibility → ADMute manually.").setPositiveButton("OK", null).show(); }

@@ -24,3 +24,9 @@ Build tools: JDK 17, Gradle 8.13 (checksum-pinned wrapper), Android Gradle Plugi
 APK SHA-256: `dc06e17f6dcea74c3c9a0e216c2a2be666b2e78d09d45fa1ecd8c9a29233d6a7`
 
 Device acceptance and signed production release remain outstanding. Follow [DEVICE_TESTING.md](DEVICE_TESTING.md) before relying on the app. This is a debug test artifact, not a published product.
+
+## Diagnostic update · 0.1.1, October 12, 2026
+
+25 synthetic tests passed; APK assembly and Android lint passed with zero errors. Debug APK signature verified. The new narrow YouTube marker pair and empty-label handling are test-covered, but **actual YouTube ad detection failed in 0.1.0 and 0.1.1 is not yet an end-to-end verified fix**. A debug-only event/count dump and one-shot screenshot probe support the next device test. There is no OCR implementation yet. See [the TCL investigation](TCL_TEST_2026-10-12.md).
+
+Diagnostic APK SHA-256: `da89c2a9bc598b9d661a7995d9283b2b8bf26d62cd8b951af51d0c19f8cbcab6`

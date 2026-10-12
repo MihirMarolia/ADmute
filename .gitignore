@@ -6,3 +6,4 @@ local.properties
 *.keystore
 dist/
 admute-window.xml
+.signing/

@@ -9,7 +9,9 @@ import java.util.Locale;
 /** Bounded traversal. Never persists screen text. Incomplete reads cannot prove an ad ended. */
 final class NodeSnapshot {
     final List<AdDetector.Label> labels = new ArrayList<>();
-    private int visited;
+    int visited;
+    int rawLabels;
+    int emptyLabels;
     boolean complete = true;
     private boolean sawVisible;
     static NodeSnapshot read(AccessibilityNodeInfo root) {
@@ -30,8 +32,8 @@ final class NodeSnapshot {
         if (visible) {
             sawVisible = true;
             boolean control = !excluded && (player || cls.endsWith("Button"));
-            if (node.getText() != null) labels.add(new AdDetector.Label(node.getText().toString(), control));
-            if (node.getContentDescription() != null) labels.add(new AdDetector.Label(node.getContentDescription().toString(), control));
+            add(node.getText(), control, !excluded);
+            add(node.getContentDescription(), control, !excluded);
         }
         for (int i = 0; i < node.getChildCount(); i++) {
             if (visited >= 1000) { complete = false; break; }
@@ -40,5 +42,12 @@ final class NodeSnapshot {
             try { walk(child, player, excluded, depth + 1); }
             finally { child.recycle(); }
         }
+    }
+    private void add(CharSequence value, boolean control, boolean eligible) {
+        if (value == null) return;
+        rawLabels++;
+        String text = value.toString();
+        if (!AdDetector.meaningful(text)) { emptyLabels++; return; }
+        labels.add(new AdDetector.Label(text, control, eligible));
     }
 }

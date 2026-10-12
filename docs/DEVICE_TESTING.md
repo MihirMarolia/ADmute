@@ -69,4 +69,19 @@ These developer-created dumps may contain private titles/account details; keep t
 | Secure video fully covered | pending |
 | Tester / date / decision | pending |
 
-**Current device-test status: not run. No Google TV is connected in this workspace.**
+**Current device-test status: TCL Android 11 installation and setup checked; YouTube ad detection failed in version 0.1.0.** See [the device investigation](TCL_TEST_2026-10-12.md). The full acceptance matrix has not passed.
+
+## Explicit debug diagnostics
+
+Debug builds provide these commands while a selected app is foregrounded:
+
+```sh
+adb shell dumpsys activity service org.admute/.AdAccessibilityService
+adb shell dumpsys activity service org.admute/.AdAccessibilityService screenshot-probe
+adb shell run-as org.admute cat shared_prefs/comfort.xml
+adb shell dumpsys activity service org.admute/.AdAccessibilityService comfort-test
+```
+
+The first command reports only counts and known ad-marker categories, including recent announcement events. Events are diagnostic only. `screenshot-probe` requests one screenshot using the accessibility API (Android 11+ in a debug build), then discards it; only brightness counts/error status are retained in `probeSummary`. The probe is not OCR.
+
+`comfort-test` explicitly arms a 10-second mute/cover test using current preferences in the selected foreground app. It is a device-output test, not a detection result. It releases on timeout, app exit, pause, service stop, or double Back. Already-muted audio remains muted; avoid changing the volume unless intentionally testing user overrides. None of these commands grant accessibility permissions or bypass protected content.

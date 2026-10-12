@@ -38,4 +38,28 @@ public class AdDetectorTest {
     @Test public void normalizesWhitespaceAndCase() {
         assertEquals(AdDetector.Evidence.AD, detect(AdDetector.YOUTUBE, "  SKIP\n AD  ", true));
     }
+    @Test public void youtubePairWorksWithGenericAccessibleViews() {
+        assertEquals(AdDetector.Evidence.AD, detector.detect(AdDetector.YOUTUBE, Arrays.asList(
+                new AdDetector.Label("Sponsored", false), new AdDetector.Label("Send to phone", false)), true));
+    }
+    @Test public void youtubePairDoesNotActivateOnEitherLabelAloneOrAnotherApp() {
+        assertEquals(AdDetector.Evidence.CLEAR, detect(AdDetector.YOUTUBE, "Sponsored", true));
+        assertEquals(AdDetector.Evidence.CLEAR, detect(AdDetector.YOUTUBE, "Send to phone", true));
+        for (String pkg : Arrays.asList(AdDetector.TUBI, AdDetector.PLEX))
+            assertEquals(AdDetector.Evidence.CLEAR, detector.detect(pkg, Arrays.asList(
+                    new AdDetector.Label("Sponsored", true), new AdDetector.Label("Send to phone", true)), true));
+    }
+    @Test public void youtubePairDoesNotUseExcludedTitlesOrSubstrings() {
+        assertEquals(AdDetector.Evidence.CLEAR, detector.detect(AdDetector.YOUTUBE, Arrays.asList(
+                new AdDetector.Label("Sponsored", false, false), new AdDetector.Label("Send to phone", true)), true));
+        assertEquals(AdDetector.Evidence.CLEAR, detector.detect(AdDetector.YOUTUBE, Arrays.asList(
+                new AdDetector.Label("Sponsored video about a phone", true), new AdDetector.Label("Send to phone", true)), true));
+    }
+    @Test public void emptyVirtualLabelsAreNotMeaningful() {
+        for (String value : Arrays.asList(null, "", "   ", "\n\t", "\u00a0", "\u200b"))
+            assertFalse(AdDetector.meaningful(value));
+        assertTrue(AdDetector.meaningful("Sponsored"));
+        assertEquals("SPONSORED", AdDetector.marker(" Sponsored "));
+        assertEquals("", AdDetector.marker("My sponsored movie"));
+    }
 }
