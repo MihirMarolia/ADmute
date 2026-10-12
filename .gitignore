@@ -7,3 +7,5 @@ local.properties
 dist/
 admute-window.xml
 .signing/
+.device-tools/
+.device-state/

@@ -27,6 +27,6 @@ Device acceptance and signed production release remain outstanding. Follow [DEVI
 
 ## Diagnostic update · 0.1.1, October 12, 2026
 
-25 synthetic tests passed; APK assembly and Android lint passed with zero errors. Debug APK signature verified. The new narrow YouTube marker pair and empty-label handling are test-covered, but **actual YouTube ad detection failed in 0.1.0 and 0.1.1 is not yet an end-to-end verified fix**. A debug-only event/count dump and one-shot screenshot probe support the next device test. There is no OCR implementation yet. See [the TCL investigation](TCL_TEST_2026-10-12.md).
+25 synthetic tests passed; APK assembly and Android lint passed with zero errors. Debug APK signature verified. **The real TCL test failed:** the fresh YouTube tree has zero meaningful labels, and system ARC callbacks replaced the app's zero-volume request with nonzero levels. A home-screen screenshot probe succeeded; readable ad playback and OCR remain unverified. Comfort protection was switched off and confirmed Paused. No end-to-end compatibility or visual-output pass is claimed. See [the measured TCL investigation](TCL_TEST_2026-10-12.md).
 
 Diagnostic APK SHA-256: `da89c2a9bc598b9d661a7995d9283b2b8bf26d62cd8b951af51d0c19f8cbcab6`

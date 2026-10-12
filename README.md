@@ -6,7 +6,7 @@ Repository: [MihirMarolia/ADmute](https://github.com/MihirMarolia/ADmute). The r
 
 The new application ID is `org.admute`; the earlier app used `com.example.admutetv`. This installs alongside the earlier app. **Disable the old AdMute TV accessibility service before enabling this one**, so two services do not compete over the shared media volume. Old settings are not imported.
 
-**Status: YouTube ad detection failed in the first TCL Android 11 device test. Version 0.1.1 is a diagnostic follow-up, not a verified fix.** See [the device findings](docs/TCL_TEST_2026-10-12.md). Allowlisting an app is not proof that its accessibility tree exposes usable ad labels. Custom video players, languages, or changed layouts can prevent detection. This app cannot guarantee protection from loud audio or flashing imagery, including the start of an ad before its label appears.
+**Status: the TCL Android 11 device test failed. YouTube exposes empty labels, and the zero-volume strategy was not honored on the HDMI ARC route. Comfort protection is paused on the tested TV. Version 0.1.1 is diagnostic, not a verified fix.** See [the measured findings and required compatibility gates](docs/TCL_TEST_2026-10-12.md). Allowlisting an app is not proof that its accessibility tree exposes usable ad labels. Custom video players, languages, or changed layouts can prevent detection. This app cannot guarantee protection from loud audio or flashing imagery, including the start of an ad before its label appears.
 
 ## Install and use
 
