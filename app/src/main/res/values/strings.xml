@@ -1,6 +1,7 @@
 <resources>
     <string name="app_name">ADMute</string>
-    <string name="service_description">Helps people with sensory sensitivities by muting recognized ads and optionally covering them with a dark, still texture in YouTube, Tubi, and Plex. Reads on-screen accessibility labels locally; no recordings or uploads. Double-press Back to release protection and pause it for one minute. Detection may miss ads and is not a guarantee against flashes.</string>
+    <string name="ad_controls_requires_android_11">%1$s · requires Android 11</string>
+    <string name="service_description">Helps people with sensory sensitivities by muting recognized ads and optionally covering them with a dark, still texture in YouTube, Tubi, and Plex. Reads accessibility labels locally. Optional YouTube controls use on-device screenshot text recognition on Android 11 or newer to activate explicit lower-right Skip ad, or Skip/Dismiss paired with Sponsored. Pixels and text are discarded; no recordings or uploads. Double-press Back to release protection and pause it for one minute. Detection may miss ads and is not a guarantee against flashes.</string>
     <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:fontFamily">sans</item>
         <item name="android:windowBackground">#101318</item>

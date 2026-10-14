@@ -6,6 +6,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.ApplicationInfo;
 import android.graphics.Bitmap;
+import android.graphics.Path;
 import android.hardware.HardwareBuffer;
 import android.os.Build;
 import android.media.AudioManager;
@@ -17,17 +18,29 @@ import android.view.Display;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 import org.admute.core.AdDetector;
+import org.admute.core.AdControlDetector;
+import org.admute.core.AdControlGuard;
 import org.admute.core.AdSession;
 import org.admute.core.VolumeLease;
+import android.util.SparseArray;
+import com.google.android.gms.vision.Frame;
+import com.google.android.gms.vision.text.Text;
+import com.google.android.gms.vision.text.TextBlock;
+import com.google.android.gms.vision.text.TextRecognizer;
 import java.io.FileDescriptor;
 import java.io.PrintWriter;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public final class AdAccessibilityService extends AccessibilityService {
     private final Handler handler = new Handler(Looper.getMainLooper());
+    private final ExecutorService adControlExecutor = Executors.newSingleThreadExecutor();
     private final AdDetector detector = new AdDetector();
+    private final AdControlDetector adControlDetector = new AdControlDetector();
     private final AdSession session = new AdSession();
     private ScreenCover cover;
     private VolumeLease volume;
@@ -35,9 +48,19 @@ public final class AdAccessibilityService extends AccessibilityService {
     private long lastBack = -10000;
     private long pausedUntil;
     private boolean running;
+    private boolean recoveryNeedsAttention;
+    private boolean coverNeedsAttention;
     private final ArrayDeque<String> debugMarkerEvents = new ArrayDeque<>();
     private long debugComfortUntil;
     private String debugComfortOwner = "";
+    private TextRecognizer textRecognizer;
+    private boolean adControlScanInFlight;
+    private long lastAdControlScan;
+    private long nextAdControlScanAt;
+    private String adControlIssue = "";
+    private final AdControlGuard adControlGuard = new AdControlGuard();
+    private String foregroundOwner = "";
+    private String adControlResult = "NONE";
     private final Runnable tick = new Runnable() {
         @Override public void run() {
             if (!running) return;
@@ -48,21 +71,50 @@ public final class AdAccessibilityService extends AccessibilityService {
             } finally { if (running) handler.postDelayed(this, 350); }
         }
     };
+    private final SharedPreferences.OnSharedPreferenceChangeListener settingsListener = (preferences, key) -> {
+        if ("enabled".equals(key) || "autoSkip".equals(key) || "mute".equals(key)
+                || "cover".equals(key) || AdDetector.PACKAGES.contains(key)) {
+            adControlGuard.reset();
+            nextAdControlScanAt = 0;
+            adControlIssue = "";
+            if (running) { handler.removeCallbacks(tick); handler.post(tick); }
+        }
+    };
     // The recovery baseline must be durable before media volume is changed.
     @SuppressLint("ApplySharedPref")
     @Override protected void onServiceConnected() {
+        release();
+        adControlGuard.reset();
         prefs = Preferences.get(this);
+        prefs.registerOnSharedPreferenceChangeListener(settingsListener);
         cover = new ScreenCover(this);
         AudioManager audio = getSystemService(AudioManager.class);
         volume = new VolumeLease(new VolumeLease.Port() {
             public int volume() { return audio.getStreamVolume(AudioManager.STREAM_MUSIC); }
             public boolean fixed() { return audio.isVolumeFixed(); }
+            public boolean muted() { return audio.isStreamMute(AudioManager.STREAM_MUSIC); }
+            public void setMuted(boolean muted) {
+                audio.adjustStreamVolume(AudioManager.STREAM_MUSIC,
+                        muted ? AudioManager.ADJUST_MUTE : AudioManager.ADJUST_UNMUTE, 0);
+            }
             public void setVolume(int value) { audio.setStreamVolume(AudioManager.STREAM_MUSIC, value, 0); }
+            public void saveMute() {
+                if (!prefs.edit().putBoolean("savedMute", true).commit())
+                    throw new IllegalStateException("Cannot save mute state");
+            }
+            public boolean ownsMute() { return prefs.getBoolean("savedMute", false); }
+            public void clearMute() {
+                if (!prefs.edit().remove("savedMute").commit())
+                    throw new IllegalStateException("Cannot clear mute state");
+            }
             public void save(int value) {
                 if (!prefs.edit().putInt("savedVolume", value).commit()) throw new IllegalStateException("Cannot save volume");
             }
             public int saved() { return prefs.getInt("savedVolume", -1); }
-            public void clear() { prefs.edit().remove("savedVolume").commit(); }
+            public void clear() {
+                if (!prefs.edit().remove("savedVolume").commit())
+                    throw new IllegalStateException("Cannot clear volume state");
+            }
         });
         try { volume.recover(); } catch (RuntimeException e) { status("Volume recovery needs attention"); }
         running = true; handler.removeCallbacks(tick); handler.post(tick);
@@ -72,28 +124,40 @@ public final class AdAccessibilityService extends AccessibilityService {
         rememberMarkerEvent(event);
         // Polls read fresh trees. Events only expedite a foreground change, never serve as evidence.
         if (event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            adControlGuard.invalidate();
             handler.removeCallbacks(tick); handler.post(tick);
         }
     }
     private void evaluate() {
         long now = SystemClock.elapsedRealtime();
         boolean enabled = prefs.getBoolean("enabled", true) && now >= pausedUntil;
-        if (!enabled) { debugComfortUntil = 0; session.reset(); release(); status("Paused"); return; }
+        if (!enabled) { debugComfortUntil = 0; adControlGuard.reset(); session.reset(); release(); status("Paused"); return; }
         AccessibilityNodeInfo root = getRootInActiveWindow();
         String pkg = "";
         AdDetector.Evidence evidence = AdDetector.Evidence.UNKNOWN;
         if (root != null) {
             try {
                 pkg = root.getPackageName() == null ? "" : root.getPackageName().toString();
+                if (!pkg.equals(foregroundOwner)) {
+                    foregroundOwner = pkg;
+                    adControlGuard.reset();
+                }
                 if (AdDetector.PACKAGES.contains(pkg) && prefs.getBoolean(pkg, true)) {
                     NodeSnapshot snapshot = NodeSnapshot.read(root);
                     evidence = detector.detect(pkg, snapshot.labels, snapshot.complete);
+                    if (prefs.getBoolean("autoSkip", false)) {
+                        activateAccessibleAdControl(root, pkg, snapshot, evidence);
+                    }
                     String sample = pkg + "\nVisible labels: " + snapshot.labels.size()
                             + " · complete read: " + snapshot.complete + "\nEmpty labels ignored: " + snapshot.emptyLabels
                             + "\nEvidence: " + evidence;
                     if (!sample.equals(prefs.getString("sample", ""))) prefs.edit().putString("sample", sample).apply();
                 }
             } finally { root.recycle(); }
+        }
+        if (pkg.isEmpty() && !foregroundOwner.isEmpty()) {
+            foregroundOwner = "";
+            adControlGuard.reset();
         }
         // A missing root releases immediately: we cannot safely establish app ownership.
         boolean protect = session.update(pkg, evidence, now, prefs.getBoolean(pkg, true));
@@ -105,31 +169,46 @@ public final class AdAccessibilityService extends AccessibilityService {
             if (prefs.getBoolean("cover", true)) cover.show(); else cover.hide();
             AudioManager audio = getSystemService(AudioManager.class);
             boolean soundNotMuted = prefs.getBoolean("mute", true)
+                    && !audio.isStreamMute(AudioManager.STREAM_MUSIC)
                     && (audio.isVolumeFixed() || audio.getStreamVolume(AudioManager.STREAM_MUSIC) != 0);
             status(testActive ? "Device test · releases automatically after 10 seconds"
                     : soundNotMuted ? "Ad detected · media audio is not muted" : "Ad detected · comfort protection active");
         } else {
             release();
+            if (AdDetector.YOUTUBE.equals(pkg) && prefs.getBoolean(pkg, true))
+                requestAdControlScan(pkg, now);
             status(session.state() == AdSession.State.COOLDOWN ? "Safety release · waiting for ad labels to clear"
                     : AdDetector.PACKAGES.contains(pkg) ? evidence == AdDetector.Evidence.UNKNOWN
                     ? "Player labels unavailable or incomplete" : "Watching for ad labels" : "Waiting for a selected streaming app");
         }
     }
     private void release() {
+        recoveryNeedsAttention = false;
+        coverNeedsAttention = false;
         try { if (cover != null) cover.hide(); }
-        catch (RuntimeException ignored) { }
-        try { if (volume != null) volume.release(); }
-        catch (RuntimeException ignored) { /* durable volume remains available for reconnect recovery */ }
+        catch (RuntimeException ignored) { coverNeedsAttention = true; }
+        try {
+            if (volume != null) { volume.release(); recoveryNeedsAttention = volume.recoveryPending(); }
+        } catch (RuntimeException ignored) { recoveryNeedsAttention = true; }
     }
     private void status(String value) {
+        if (!adControlIssue.isEmpty() && prefs != null && prefs.getBoolean("autoSkip", false))
+            value += " · " + adControlIssue;
+        if (coverNeedsAttention) value = "Cover cleanup pending · disable the service · " + value;
+        if (recoveryNeedsAttention) value = "Audio recovery pending · adjust volume or reconnect · " + value;
         if (prefs != null && !value.equals(prefs.getString("status", ""))) prefs.edit().putString("status", value).apply();
     }
     @Override protected boolean onKeyEvent(KeyEvent event) {
         if (prefs == null) return false;
+        if (event.getAction() == KeyEvent.ACTION_DOWN
+                && event.getKeyCode() != KeyEvent.KEYCODE_VOLUME_UP
+                && event.getKeyCode() != KeyEvent.KEYCODE_VOLUME_DOWN
+                && event.getKeyCode() != KeyEvent.KEYCODE_VOLUME_MUTE) adControlGuard.invalidate();
         if (event.getKeyCode() == KeyEvent.KEYCODE_BACK && event.getAction() == KeyEvent.ACTION_UP) {
             long now = SystemClock.elapsedRealtime();
             if (now - lastBack <= 800) {
                 pausedUntil = now + 60000;
+                adControlGuard.reset();
                 debugComfortUntil = 0;
                 session.reset(); release(); status("Paused for one minute · double Back");
                 lastBack = -10000;
@@ -139,19 +218,31 @@ public final class AdAccessibilityService extends AccessibilityService {
         return false;
     }
     @Override public void onInterrupt() {
+        adControlGuard.reset();
         pausedUntil = SystemClock.elapsedRealtime() + 60000;
         debugComfortUntil = 0;
         session.reset(); release();
     }
     private void stop() {
+        adControlGuard.reset();
+        if (prefs != null) prefs.unregisterOnSharedPreferenceChangeListener(settingsListener);
         running = false; debugComfortUntil = 0; handler.removeCallbacksAndMessages(null); session.reset(); release(); status("Service stopped");
     }
     @Override public boolean onUnbind(Intent intent) { stop(); return super.onUnbind(intent); }
-    @Override public void onDestroy() { stop(); super.onDestroy(); }
+    @Override public void onDestroy() {
+        stop();
+        // Creation, use, and release all stay on the same worker, including late initialization.
+        adControlExecutor.execute(() -> {
+            if (textRecognizer != null) { textRecognizer.release(); textRecognizer = null; }
+        });
+        adControlExecutor.shutdown();
+        super.onDestroy();
+    }
     private boolean debugBuild() { return (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0; }
     private void rememberMarkerEvent(AccessibilityEvent event) {
         if (!debugBuild() || event.getPackageName() == null
-                || !AdDetector.PACKAGES.contains(event.getPackageName().toString())) return;
+                || !AdDetector.PACKAGES.contains(event.getPackageName().toString())
+                || prefs == null || !prefs.getBoolean(event.getPackageName().toString(), true)) return;
         List<String> markers = new ArrayList<>();
         for (CharSequence value : event.getText()) {
             String text = value == null ? "" : value.toString();
@@ -178,11 +269,15 @@ public final class AdAccessibilityService extends AccessibilityService {
         if (!debugBuild()) { writer.println("Diagnostics are available in debug builds only."); return; }
         writer.println("ADMute state=" + session.state() + " running=" + running);
         writer.println("paused=" + (SystemClock.elapsedRealtime() < pausedUntil));
+        writer.println("autoAdControls=" + (prefs != null && prefs.getBoolean("autoSkip", false))
+                + " lastResult=" + adControlResult);
+        if (!adControlIssue.isEmpty()) writer.println("adControlIssue=" + adControlIssue);
         AccessibilityNodeInfo root = getRootInActiveWindow();
         if (root == null) writer.println("No active accessibility root.");
         else try {
             String pkg = String.valueOf(root.getPackageName());
-            if (!AdDetector.PACKAGES.contains(pkg)) writer.println("No selected streaming app in foreground.");
+            if (!AdDetector.PACKAGES.contains(pkg) || prefs == null || !prefs.getBoolean(pkg, true))
+                writer.println("No selected streaming app in foreground.");
             else {
                 NodeSnapshot snapshot = NodeSnapshot.read(root);
                 writer.println("package=" + pkg + " nodes=" + snapshot.visited + " rawLabels=" + snapshot.rawLabels
@@ -224,6 +319,169 @@ public final class AdAccessibilityService extends AccessibilityService {
         try { return expected.equals(String.valueOf(root.getPackageName())); }
         finally { root.recycle(); }
     }
+    private void activateAccessibleAdControl(AccessibilityNodeInfo root, String pkg, NodeSnapshot snapshot,
+            AdDetector.Evidence evidence) {
+        int width = getResources().getDisplayMetrics().widthPixels;
+        int height = getResources().getDisplayMetrics().heightPixels;
+        AdControlDetector.Target target = adControlDetector.findTarget(pkg, snapshot.controls, width, height);
+        if (snapshot.complete) adControlGuard.observe(target != null);
+        if (target == null || evidence != AdDetector.Evidence.AD) return;
+        String key = pkg + ":" + target.action().name();
+        if (!adControlGuard.canActivate(key)) return;
+        if (performAccessibleClick(root, pkg, target.candidate(), 0, new int[]{0})) {
+            adControlGuard.activated(key);
+            adControlResult = target.action().name();
+            status("Activated visible ad control: " + target.action().name().toLowerCase(Locale.ROOT));
+        }
+    }
+    private boolean performAccessibleClick(AccessibilityNodeInfo node, String owner,
+            AdControlDetector.Candidate target, int depth, int[] visited) {
+        if (node == null || depth > 40 || ++visited[0] > 1000) return false;
+        android.graphics.Rect bounds = new android.graphics.Rect();
+        node.getBoundsInScreen(bounds);
+        if (owner.equals(String.valueOf(node.getPackageName())) && node.isVisibleToUser()
+                && node.isEnabled() && node.isClickable() && matchesLabel(node, target.text())
+                && bounds.left == target.left() && bounds.top == target.top()
+                && bounds.right == target.right() && bounds.bottom == target.bottom()
+                && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true;
+        for (int i = 0; i < node.getChildCount(); i++) {
+            AccessibilityNodeInfo child = node.getChild(i);
+            if (child == null) continue;
+            try { if (performAccessibleClick(child, owner, target, depth + 1, visited)) return true; }
+            finally { child.recycle(); }
+        }
+        return false;
+    }
+    private boolean matchesLabel(AccessibilityNodeInfo node, String label) {
+        String expected = AdDetector.normalize(label);
+        CharSequence text = node.getText(), description = node.getContentDescription();
+        return (text != null && expected.equals(AdDetector.normalize(text.toString())))
+                || (description != null && expected.equals(AdDetector.normalize(description.toString())));
+    }
+    private void requestAdControlScan(String owner, long now) {
+        if (Build.VERSION.SDK_INT < 30 || !prefs.getBoolean("autoSkip", false)
+                || !prefs.getBoolean("enabled", true) || now < pausedUntil
+                || now < nextAdControlScanAt || adControlScanInFlight || now - lastAdControlScan < 1500) return;
+        lastAdControlScan = now;
+        long generation = adControlGuard.generation();
+        adControlScanInFlight = true;
+        try { takeScreenshot(Display.DEFAULT_DISPLAY, getMainExecutor(), new TakeScreenshotCallback() {
+            @Override public void onSuccess(ScreenshotResult result) {
+                Bitmap hardware = null, pixels = null;
+                try (HardwareBuffer buffer = result.getHardwareBuffer()) {
+                    if (!adControlScanAllowed(owner, generation, now)) { adControlScanInFlight = false; return; }
+                    hardware = Bitmap.wrapHardwareBuffer(buffer, result.getColorSpace());
+                    if (hardware == null) { adControlScanFailed(); return; }
+                    pixels = hardware.copy(Bitmap.Config.ARGB_8888, false);
+                    if (pixels == null) { adControlScanFailed(); return; }
+                } catch (RuntimeException error) {
+                    adControlScanFailed();
+                    return;
+                } finally {
+                    if (hardware != null) hardware.recycle();
+                }
+                Bitmap frame = pixels;
+                try { adControlExecutor.execute(() -> recognizeAdControls(owner, frame, generation, now)); }
+                catch (RuntimeException error) { frame.recycle(); adControlScanFailed(); }
+            }
+            @Override public void onFailure(int errorCode) { adControlScanFailed(); }
+        }); } catch (RuntimeException error) { adControlScanFailed(); }
+    }
+    private void recognizeAdControls(String owner, Bitmap frame, long generation, long startedAt) {
+        try {
+            if (textRecognizer == null)
+                textRecognizer = new TextRecognizer.Builder(getApplicationContext()).build();
+            if (!textRecognizer.isOperational()) {
+                handler.post(() -> adControlScanFailed("Auto controls unavailable: OCR model missing on this TV", 60000));
+                return;
+            }
+            SparseArray<TextBlock> blocks = textRecognizer.detect(new Frame.Builder().setBitmap(frame).build());
+            List<AdControlDetector.Candidate> candidates = new ArrayList<>();
+            for (int i = 0; i < blocks.size(); i++) {
+                TextBlock block = blocks.valueAt(i);
+                for (Text line : block.getComponents()) {
+                    android.graphics.Rect bounds = line.getBoundingBox();
+                    if (bounds != null) candidates.add(new AdControlDetector.Candidate(
+                            line.getValue(), bounds.left, bounds.top, bounds.right, bounds.bottom, true));
+                }
+            }
+            int width = frame.getWidth(), height = frame.getHeight();
+            handler.post(() -> {
+                try {
+                    if (adControlScanAllowed(owner, generation, startedAt)) {
+                        adControlIssue = "";
+                        nextAdControlScanAt = 0;
+                        handleAdControlScan(owner, candidates, width, height);
+                    }
+                } catch (RuntimeException error) { adControlScanFailed(); }
+                finally { adControlScanInFlight = false; }
+            });
+        } catch (RuntimeException error) {
+            handler.post(() -> adControlScanFailed("On-device text recognition failed"));
+        } finally {
+            frame.recycle();
+        }
+    }
+    private boolean adControlScanAllowed(String owner, long generation, long startedAt) {
+        return running && prefs != null && prefs.getBoolean("autoSkip", false)
+                && adControlGuard.current(generation, startedAt, SystemClock.elapsedRealtime())
+                && prefs.getBoolean("enabled", true) && prefs.getBoolean(owner, true)
+                && SystemClock.elapsedRealtime() >= pausedUntil
+                && !(SystemClock.elapsedRealtime() < debugComfortUntil && debugComfortOwner.equals(owner))
+                && cover != null && !cover.isShowing()
+                && foregroundMatches(owner);
+    }
+    private void adControlScanFailed() { adControlScanFailed("Ad-control scan failed"); }
+    private void adControlScanFailed(String message) {
+        adControlScanFailed(message, 10000);
+    }
+    private void adControlScanFailed(String message, long retryDelay) {
+        adControlScanInFlight = false;
+        adControlResult = "SCAN_FAILED";
+        if (running) {
+            adControlIssue = message;
+            nextAdControlScanAt = SystemClock.elapsedRealtime() + retryDelay;
+            status("No automatic control activated");
+        }
+    }
+    private void handleAdControlScan(String owner, List<AdControlDetector.Candidate> candidates,
+            int width, int height) {
+        AdControlDetector.Target target = adControlDetector.findTarget(owner, candidates, width, height);
+        if (target == null) {
+            adControlResult = "NO_CONTROL";
+            adControlGuard.observe(false, AdControlGuard.Source.OCR);
+            return;
+        }
+        adControlGuard.observe(true, AdControlGuard.Source.OCR);
+        String key = owner + ":" + target.action().name();
+        if (!adControlGuard.canActivate(key)) return;
+        AdControlDetector.Candidate candidate = target.candidate();
+        float x = candidate.left() + (candidate.right() - candidate.left()) / 2f;
+        float y = candidate.top() + (candidate.bottom() - candidate.top()) / 2f;
+        Path path = new Path();
+        path.moveTo(x, y);
+        android.accessibilityservice.GestureDescription gesture =
+                new android.accessibilityservice.GestureDescription.Builder()
+                        .addStroke(new android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 100))
+                        .build();
+        adControlGuard.activated(key, AdControlGuard.Source.OCR);
+        adControlResult = "PENDING_" + target.action().name();
+        if (!dispatchGesture(gesture, new GestureResultCallback() {
+            @Override public void onCompleted(android.accessibilityservice.GestureDescription completedGesture) {
+                adControlResult = target.action().name();
+                if (running) status("Activated visible ad control: " + target.action().name().toLowerCase(Locale.ROOT));
+            }
+            @Override public void onCancelled(android.accessibilityservice.GestureDescription cancelledGesture) {
+                // Keep the attempt latched until the control disappears; avoid repeated taps.
+                adControlResult = "CANCELLED";
+                if (running) status("Could not activate visible ad control");
+            }
+        }, handler)) {
+            // A rejected gesture is also an attempt; do not loop on a persistent control.
+            adControlResult = "CANCELLED";
+            status("Could not activate visible ad control");
+        }
+    }
     private void startScreenshotProbe() {
         if (!debugBuild()) return;
         if (Build.VERSION.SDK_INT < 30) { probeResult("Screenshot API requires Android 11 or newer."); return; }
@@ -232,7 +490,9 @@ public final class AdAccessibilityService extends AccessibilityService {
         String owner;
         try { owner = String.valueOf(root.getPackageName()); }
         finally { root.recycle(); }
-        if (!AdDetector.PACKAGES.contains(owner)) { probeResult("Open a supported app before the probe."); return; }
+        if (!AdDetector.PACKAGES.contains(owner) || prefs == null || !prefs.getBoolean(owner, true)) {
+            probeResult("Open a selected supported app before the probe."); return;
+        }
         probeResult("Capture pending for " + owner);
         takeScreenshot(Display.DEFAULT_DISPLAY, getMainExecutor(), new TakeScreenshotCallback() {
             @Override public void onSuccess(ScreenshotResult result) {

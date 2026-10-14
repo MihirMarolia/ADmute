@@ -26,7 +26,12 @@ final class ScreenCover {
     }
     void hide() {
         if (view == null) return;
-        try { manager.removeViewImmediate(view); }
-        finally { view = null; }
+        try { manager.removeViewImmediate(view); view = null; }
+        catch (RuntimeException error) {
+            // Retain an attached window so the next release can retry its removal.
+            if (!view.isAttachedToWindow()) view = null;
+            else throw error;
+        }
     }
+    boolean isShowing() { return view != null; }
 }

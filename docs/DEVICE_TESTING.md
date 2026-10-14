@@ -28,6 +28,8 @@ Repeat for **YouTube / Tubi / Plex** with TV speakers, then your normal HDMI/CEC
 | Mute only / cover only | Only chosen effect occurs |
 | Already muted before ad | Remains muted afterward |
 | Set volume to a new nonzero level during ad | New level is respected; no repeated muting or baseline overwrite |
+| Native media mute / HDMI ARC | Confirm Android mute state and independently verify audible output stops; Android state alone is insufficient |
+| Automatic Dismiss / Skip (opt-in) | With the explicit control switch enabled, confirm only the lower-right YouTube `Skip ad` or sponsored `Dismiss` control is activated; confirm ordinary playback, recommendations, and unrelated buttons are never tapped |
 | Ten exits from original level, e.g. 12 | Exact original media stream volume restored |
 | Home / app switch / disable selected app | Cover disappears and volume releases on next foreground evaluation |
 | Double Back within 0.8 s | Release and pause one minute; Back still navigates normally |
@@ -69,7 +71,22 @@ These developer-created dumps may contain private titles/account details; keep t
 | Secure video fully covered | pending |
 | Tester / date / decision | pending |
 
-**Current device-test status: TCL Android 11 installation and setup checked; YouTube ad detection failed in version 0.1.0.** See [the device investigation](TCL_TEST_2026-10-12.md). The full acceptance matrix has not passed.
+**Current device-test status: TCL Android 11. Version 0.1.2's explicit output test confirmed the grey cover and native mute over HDMI ARC; YouTube ad detection remains unverified because its accessibility tree still has no meaningful labels.** See [the device investigation](TCL_TEST_2026-10-12.md). The full acceptance matrix has not passed.
+
+Version 0.1.6 is built, software-verified, and installed as an in-place update on the TCL TV. Android confirms version code 7. Accessibility remained disabled immediately after installation; the owner agreed to re-enable it for testing. No new live ad-control or full-break acceptance pass is claimed yet. Automatic OCR controls are YouTube-only and require Android 11 or newer. Include these regression cases: change apps or pause while a scan is pending; navigate during recognition; repeat ad pods; cancel a gesture; verify that a failed audio restore remains recorded; verify Home, double Back, and service disable remove the cover and release owned audio state.
+
+### TCL enabled-switch / Off-row recovery
+
+In the live 0.1.7 follow-up, TCL's app-start policy blocked the service despite the owner's enabled switch. Android logs reported `callee_does't_have_OP_AUTO_START_permission`; `cmd appops get org.admute` reported `APP_AUTO_START: ignore`. With the owner's requested enablement, the developer allowed only ADMute's startup operation:
+
+```sh
+adb shell cmd appops get org.admute APP_AUTO_START
+adb shell cmd appops set org.admute APP_AUTO_START allow
+```
+
+Then refresh ADMute's switch through TV Accessibility settings and verify a bound service with `adb shell dumpsys activity service org.admute/.AdAccessibilityService`. This is a TCL-specific operator setting, not a permission the app grants itself. Do not reset another app's startup policy or overwrite a list of other enabled accessibility services.
+
+Version 0.1.7 is now installed and running. Its live OCR check reports the Google Play Services OCR model unavailable; YouTube labels are still empty. Automatic controls therefore have not passed. The setup status exposes this blocker and backs off repeated model checks to once per minute.
 
 ## Explicit debug diagnostics
 
@@ -85,3 +102,5 @@ adb shell dumpsys activity service org.admute/.AdAccessibilityService comfort-te
 The first command reports only counts and known ad-marker categories, including recent announcement events. Events are diagnostic only. `screenshot-probe` requests one screenshot using the accessibility API (Android 11+ in a debug build), then discards it; only brightness counts/error status are retained in `probeSummary`. The probe is not OCR.
 
 `comfort-test` explicitly arms a 10-second mute/cover test using current preferences in the selected foreground app. It is a device-output test, not a detection result. It releases on timeout, app exit, pause, service stop, or double Back. Already-muted audio remains muted; avoid changing the volume unless intentionally testing user overrides. None of these commands grant accessibility permissions or bypass protected content.
+
+If **Automatically activate visible Dismiss/Skip controls** is enabled, the debug service dump includes `autoAdControls` and `lastResult`. The opt-in feature uses Google Play Services on-device text recognition over selected-app screenshots while protection is inactive. It activates an exact lower-right YouTube `Skip ad`, a lower-right YouTube `Skip` paired with a visible `Sponsored` label, or an exact lower-right `Dismiss` with a simultaneous `Sponsored` label. It is separate from ad detection and may miss controls. Check that ordinary screens and unrelated controls are not activated. If the recognizer is unavailable on the TV, it reports a scan failure and does not tap.

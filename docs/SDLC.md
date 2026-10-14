@@ -19,7 +19,7 @@ The initial user scope is ads only. It does not detect or reduce flashing in reg
 
 ## 2. Design gate
 
-Choose accessibility metadata rather than image capture: no continuous recordings, OCR cost, or unreliable whole-screen keyword search. Separate detector, state machine, and volume ownership from Android so critical behavior is testable. Use an accessibility overlay that does not take focus or touch input. Poll fresh trees because video countdown labels may not emit consistent events.
+Use fresh accessibility metadata for ad comfort detection. Optional YouTube control activation uses bounded on-device screenshot OCR for explicit controls; it is separate from ad detection and remains off by default. No recordings or broad whole-screen keyword rules are used. Separate detector, state machine, and volume ownership from Android so critical behavior is testable. Use an accessibility overlay that does not take focus or touch input. Poll fresh trees because video countdown labels may not emit consistent events.
 
 Current rules are English hypotheses, not observations from the user's device. Non-English support and app-version certification require actual accessibility metadata. A miss is preferable to obscuring a movie because its title mentions advertising.
 

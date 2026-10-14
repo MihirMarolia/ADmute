@@ -4,6 +4,6 @@
     android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows|flagRequestFilterKeyEvents"
     android:canRetrieveWindowContent="true"
     android:canRequestFilterKeyEvents="true"
-    android:isAccessibilityTool="true"
+    android:canPerformGestures="true"
     android:notificationTimeout="100"
     android:description="@string/service_description" />

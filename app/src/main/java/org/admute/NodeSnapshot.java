@@ -1,6 +1,8 @@
 package org.admute;
 
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.graphics.Rect;
+import org.admute.core.AdControlDetector;
 import org.admute.core.AdDetector;
 import java.util.ArrayList;
 import java.util.List;
@@ -9,6 +11,7 @@ import java.util.Locale;
 /** Bounded traversal. Never persists screen text. Incomplete reads cannot prove an ad ended. */
 final class NodeSnapshot {
     final List<AdDetector.Label> labels = new ArrayList<>();
+    final List<AdControlDetector.Candidate> controls = new ArrayList<>();
     int visited;
     int rawLabels;
     int emptyLabels;
@@ -34,6 +37,12 @@ final class NodeSnapshot {
             boolean control = !excluded && (player || cls.endsWith("Button"));
             add(node.getText(), control, !excluded);
             add(node.getContentDescription(), control, !excluded);
+            Rect bounds = new Rect();
+            node.getBoundsInScreen(bounds);
+            if (!excluded) {
+                addControl(node.getText(), bounds, node.isClickable() && node.isEnabled());
+                addControl(node.getContentDescription(), bounds, node.isClickable() && node.isEnabled());
+            }
         }
         for (int i = 0; i < node.getChildCount(); i++) {
             if (visited >= 1000) { complete = false; break; }
@@ -49,5 +58,10 @@ final class NodeSnapshot {
         String text = value.toString();
         if (!AdDetector.meaningful(text)) { emptyLabels++; return; }
         labels.add(new AdDetector.Label(text, control, eligible));
+    }
+    private void addControl(CharSequence value, Rect bounds, boolean clickable) {
+        if (value == null || !AdDetector.meaningful(value.toString())) return;
+        controls.add(new AdControlDetector.Candidate(value.toString(), bounds.left, bounds.top,
+                bounds.right, bounds.bottom, clickable));
     }
 }
