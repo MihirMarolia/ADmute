@@ -1,3 +1,5 @@
+> Historical implementation guide. See [README.md](README.md) for the current rebuild and disable this earlier accessibility service before enabling the new one.
+
 # AdMute TV
 
 **AdMute TV** is a personal, sideloaded Android TV application that runs as an Android accessibility service. It watches for **accessibility text** exposed by the foreground application, mutes the shared media stream when a configured ad marker is visible, and restores the previous media-volume level after the marker disappears.
