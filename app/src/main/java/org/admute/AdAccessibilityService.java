@@ -22,6 +22,8 @@ import org.admute.core.AdControlDetector;
 import org.admute.core.AdControlGuard;
 import org.admute.core.AdSession;
 import org.admute.core.VolumeLease;
+import org.admute.core.VisualAdDetector;
+import org.admute.core.VisualAdSession;
 import android.util.SparseArray;
 import com.google.android.gms.vision.Frame;
 import com.google.android.gms.vision.text.Text;
@@ -42,6 +44,14 @@ public final class AdAccessibilityService extends AccessibilityService {
     private final AdDetector detector = new AdDetector();
     private final AdControlDetector adControlDetector = new AdControlDetector();
     private final AdSession session = new AdSession();
+    private final VisualAdDetector visualDetector = new VisualAdDetector();
+    private final VisualAdSession visualSession = new VisualAdSession();
+    private long visualGeneration, lastVisualScan, nextVisualScanAt;
+    private boolean visualScanInFlight;
+    private android.graphics.Rect[] visualWindows = new android.graphics.Rect[0];
+    private String visualResult = "NOT_SCANNED";
+    private boolean foregroundNotice;
+    private String reliabilityIssue = "";
     private ScreenCover cover;
     private VolumeLease volume;
     private SharedPreferences prefs;
@@ -73,7 +83,9 @@ public final class AdAccessibilityService extends AccessibilityService {
     };
     private final SharedPreferences.OnSharedPreferenceChangeListener settingsListener = (preferences, key) -> {
         if ("enabled".equals(key) || "autoSkip".equals(key) || "mute".equals(key)
-                || "cover".equals(key) || AdDetector.PACKAGES.contains(key)) {
+                || "cover".equals(key) || "visualProtection".equals(key) || AdDetector.PACKAGES.contains(key)) {
+            resetVisual();
+            nextVisualScanAt = 0;
             adControlGuard.reset();
             nextAdControlScanAt = 0;
             adControlIssue = "";
@@ -124,14 +136,24 @@ public final class AdAccessibilityService extends AccessibilityService {
         rememberMarkerEvent(event);
         // Polls read fresh trees. Events only expedite a foreground change, never serve as evidence.
         if (event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            visualGeneration++;
             adControlGuard.invalidate();
             handler.removeCallbacks(tick); handler.post(tick);
         }
     }
+    @Override public int onStartCommand(Intent intent, int flags, int startId) {
+        // Setup starts this explicitly while visible; some TV firmwares reject a
+        // foreground promotion initiated solely from the accessibility binding.
+        if (prefs == null) prefs = Preferences.get(this);
+        foregroundNotice = false; reliabilityIssue = "";
+        updateForegroundNotice();
+        return prefs.getBoolean("enabled", true) ? START_STICKY : START_NOT_STICKY;
+    }
     private void evaluate() {
         long now = SystemClock.elapsedRealtime();
+        updateForegroundNotice();
         boolean enabled = prefs.getBoolean("enabled", true) && now >= pausedUntil;
-        if (!enabled) { debugComfortUntil = 0; adControlGuard.reset(); session.reset(); release(); status("Paused"); return; }
+        if (!enabled) { resetVisual(); debugComfortUntil = 0; adControlGuard.reset(); session.reset(); release(); status("Paused"); return; }
         AccessibilityNodeInfo root = getRootInActiveWindow();
         String pkg = "";
         AdDetector.Evidence evidence = AdDetector.Evidence.UNKNOWN;
@@ -139,6 +161,7 @@ public final class AdAccessibilityService extends AccessibilityService {
             try {
                 pkg = root.getPackageName() == null ? "" : root.getPackageName().toString();
                 if (!pkg.equals(foregroundOwner)) {
+                    resetVisual();
                     foregroundOwner = pkg;
                     adControlGuard.reset();
                 }
@@ -156,15 +179,20 @@ public final class AdAccessibilityService extends AccessibilityService {
             } finally { root.recycle(); }
         }
         if (pkg.isEmpty() && !foregroundOwner.isEmpty()) {
+            resetVisual();
             foregroundOwner = "";
             adControlGuard.reset();
         }
         // A missing root releases immediately: we cannot safely establish app ownership.
         boolean protect = session.update(pkg, evidence, now, prefs.getBoolean(pkg, true));
+        if (!visualEnabled() || !AdDetector.YOUTUBE.equals(pkg) || !prefs.getBoolean(pkg, true)) resetVisual();
+        else requestVisualScan(pkg, now);
+        protect |= visualSession.active();
         boolean testActive = now < debugComfortUntil && pkg.equals(debugComfortOwner) && prefs.getBoolean(pkg, true);
         if (!pkg.equals(debugComfortOwner)) debugComfortUntil = 0;
         protect |= testActive;
         if (protect) {
+            cover.setLabelWindows(visualSession.active() ? visualWindows : new android.graphics.Rect[0]);
             if (prefs.getBoolean("mute", true)) volume.acquire(); else volume.release();
             if (prefs.getBoolean("cover", true)) cover.show(); else cover.hide();
             AudioManager audio = getSystemService(AudioManager.class);
@@ -172,12 +200,14 @@ public final class AdAccessibilityService extends AccessibilityService {
                     && !audio.isStreamMute(AudioManager.STREAM_MUSIC)
                     && (audio.isVolumeFixed() || audio.getStreamVolume(AudioManager.STREAM_MUSIC) != 0);
             status(testActive ? "Device test · releases automatically after 10 seconds"
+                    : visualSession.active() ? "Visual ad detected · protection active · " + visualResult
                     : soundNotMuted ? "Ad detected · media audio is not muted" : "Ad detected · comfort protection active");
         } else {
             release();
-            if (AdDetector.YOUTUBE.equals(pkg) && prefs.getBoolean(pkg, true))
+            if (!visualEnabled() && AdDetector.YOUTUBE.equals(pkg) && prefs.getBoolean(pkg, true))
                 requestAdControlScan(pkg, now);
             status(session.state() == AdSession.State.COOLDOWN ? "Safety release · waiting for ad labels to clear"
+                    : visualEnabled() && AdDetector.YOUTUBE.equals(pkg) ? "Visual YouTube check · " + visualResult
                     : AdDetector.PACKAGES.contains(pkg) ? evidence == AdDetector.Evidence.UNKNOWN
                     ? "Player labels unavailable or incomplete" : "Watching for ad labels" : "Waiting for a selected streaming app");
         }
@@ -192,7 +222,8 @@ public final class AdAccessibilityService extends AccessibilityService {
         } catch (RuntimeException ignored) { recoveryNeedsAttention = true; }
     }
     private void status(String value) {
-        if (!adControlIssue.isEmpty() && prefs != null && prefs.getBoolean("autoSkip", false))
+        if (!reliabilityIssue.isEmpty()) value += " · " + reliabilityIssue;
+        if (!visualEnabled() && !adControlIssue.isEmpty() && prefs != null && prefs.getBoolean("autoSkip", false))
             value += " · " + adControlIssue;
         if (coverNeedsAttention) value = "Cover cleanup pending · disable the service · " + value;
         if (recoveryNeedsAttention) value = "Audio recovery pending · adjust volume or reconnect · " + value;
@@ -203,11 +234,12 @@ public final class AdAccessibilityService extends AccessibilityService {
         if (event.getAction() == KeyEvent.ACTION_DOWN
                 && event.getKeyCode() != KeyEvent.KEYCODE_VOLUME_UP
                 && event.getKeyCode() != KeyEvent.KEYCODE_VOLUME_DOWN
-                && event.getKeyCode() != KeyEvent.KEYCODE_VOLUME_MUTE) adControlGuard.invalidate();
+                && event.getKeyCode() != KeyEvent.KEYCODE_VOLUME_MUTE) { adControlGuard.invalidate(); visualGeneration++; }
         if (event.getKeyCode() == KeyEvent.KEYCODE_BACK && event.getAction() == KeyEvent.ACTION_UP) {
             long now = SystemClock.elapsedRealtime();
             if (now - lastBack <= 800) {
                 pausedUntil = now + 60000;
+                resetVisual();
                 adControlGuard.reset();
                 debugComfortUntil = 0;
                 session.reset(); release(); status("Paused for one minute · double Back");
@@ -218,15 +250,19 @@ public final class AdAccessibilityService extends AccessibilityService {
         return false;
     }
     @Override public void onInterrupt() {
+        resetVisual();
         adControlGuard.reset();
         pausedUntil = SystemClock.elapsedRealtime() + 60000;
         debugComfortUntil = 0;
         session.reset(); release();
     }
     private void stop() {
+        resetVisual();
         adControlGuard.reset();
         if (prefs != null) prefs.unregisterOnSharedPreferenceChangeListener(settingsListener);
         running = false; debugComfortUntil = 0; handler.removeCallbacksAndMessages(null); session.reset(); release(); status("Service stopped");
+        stopForeground(STOP_FOREGROUND_REMOVE); foregroundNotice = false;
+        stopSelf();
     }
     @Override public boolean onUnbind(Intent intent) { stop(); return super.onUnbind(intent); }
     @Override public void onDestroy() {
@@ -269,6 +305,8 @@ public final class AdAccessibilityService extends AccessibilityService {
         if (!debugBuild()) { writer.println("Diagnostics are available in debug builds only."); return; }
         writer.println("ADMute state=" + session.state() + " running=" + running);
         writer.println("paused=" + (SystemClock.elapsedRealtime() < pausedUntil));
+        writer.println("visualProtection=" + visualEnabled() + " active=" + visualSession.active()
+                + " result=" + visualResult + " scanPending=" + visualScanInFlight);
         writer.println("autoAdControls=" + (prefs != null && prefs.getBoolean("autoSkip", false))
                 + " lastResult=" + adControlResult);
         if (!adControlIssue.isEmpty()) writer.println("adControlIssue=" + adControlIssue);
@@ -292,6 +330,14 @@ public final class AdAccessibilityService extends AccessibilityService {
         } finally { root.recycle(); }
         writer.println("Recent selected-app event categories (in memory only):");
         synchronized (debugMarkerEvents) { for (String item : debugMarkerEvents) writer.println(item); }
+        if (args != null && java.util.Arrays.asList(args).contains("idle-restart-probe")) {
+            if (running && cover != null && !cover.isShowing() && !visualSession.active()
+                    && !session.protectedNow() && volume != null && !volume.recoveryPending()
+                    && SystemClock.elapsedRealtime() >= debugComfortUntil) {
+                writer.println("Idle debug process restart armed; no protection or audio ownership is active.");
+                handler.postDelayed(() -> android.os.Process.killProcess(android.os.Process.myPid()), 1000);
+            } else writer.println("Restart probe refused: protection or audio recovery is active.");
+        }
         if (args != null && java.util.Arrays.asList(args).contains("screenshot-probe")) {
             startScreenshotProbe();
             writer.println("One-shot screenshot probe requested; read probeSummary in debug preferences for the result.");
@@ -358,6 +404,123 @@ public final class AdAccessibilityService extends AccessibilityService {
         return (text != null && expected.equals(AdDetector.normalize(text.toString())))
                 || (description != null && expected.equals(AdDetector.normalize(description.toString())));
     }
+    private boolean visualEnabled() {
+        return Build.VERSION.SDK_INT >= 30 && prefs != null && prefs.getBoolean("visualProtection", false);
+    }
+    private void updateForegroundNotice() {
+        boolean enabled = prefs.getBoolean("enabled", true);
+        if (!enabled) {
+            if (foregroundNotice) stopForeground(STOP_FOREGROUND_REMOVE);
+            foregroundNotice = false; return;
+        }
+        if (foregroundNotice || !reliabilityIssue.isEmpty()) return;
+        try {
+            android.app.NotificationManager manager = getSystemService(android.app.NotificationManager.class);
+            manager.createNotificationChannel(new android.app.NotificationChannel("protection", "Sensory comfort protection",
+                    android.app.NotificationManager.IMPORTANCE_LOW));
+            android.app.PendingIntent setup = android.app.PendingIntent.getActivity(this, 0,
+                    new Intent(this, MainActivity.class), android.app.PendingIntent.FLAG_IMMUTABLE | android.app.PendingIntent.FLAG_UPDATE_CURRENT);
+            android.app.Notification notice = new android.app.Notification.Builder(this, "protection")
+                    .setSmallIcon(android.R.drawable.ic_lock_silent_mode)
+                    .setContentTitle("ADMute protection enabled")
+                    .setContentText("Open settings to pause. Double Back releases protection for one minute.")
+                    .setContentIntent(setup).setOngoing(true).setCategory(android.app.Notification.CATEGORY_SERVICE).build();
+            if (Build.VERSION.SDK_INT >= 34)
+                startForeground(101, notice, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+            else startForeground(101, notice);
+            foregroundNotice = true;
+        } catch (RuntimeException error) { reliabilityIssue = "Foreground reliability notice unavailable"; }
+    }
+    private void resetVisual() {
+        visualGeneration++;
+        visualSession.reset();
+        visualWindows = new android.graphics.Rect[0];
+    }
+    private boolean visualScanAllowed(String owner, long generation, long started) {
+        long now = SystemClock.elapsedRealtime();
+        return running && visualEnabled() && generation == visualGeneration && now >= started
+                && now - started <= 1500 && prefs.getBoolean("enabled", true)
+                && prefs.getBoolean(owner, true) && now >= pausedUntil && foregroundMatches(owner)
+                && now >= debugComfortUntil;
+    }
+    private void visualScanFailed(long generation, String reason) {
+        visualScanInFlight = false;
+        if (!running || generation != visualGeneration) return;
+        visualSession.failed();
+        nextVisualScanAt = SystemClock.elapsedRealtime() + 5000;
+        visualResult = reason + (visualSession.active() ? " · holding protection; double Back to release" : "");
+    }
+    private static android.graphics.Rect labelWindow(VisualAdDetector.Box box) {
+        return new android.graphics.Rect(box.left - 2, box.top - 2, box.right + 2, box.bottom + 2);
+    }
+    private void requestVisualScan(String owner, long now) {
+        // This Android 11 device enforces a one-second screenshot interval.
+        if (Build.VERSION.SDK_INT < 30 || !visualEnabled() || visualScanInFlight || now < nextVisualScanAt || now - lastVisualScan < 1100
+                || now < debugComfortUntil || (cover.isShowing() && !visualSession.active())) return;
+        final long generation = visualGeneration;
+        lastVisualScan = now;
+        visualScanInFlight = true;
+        try { takeScreenshot(Display.DEFAULT_DISPLAY, getMainExecutor(), new TakeScreenshotCallback() {
+            @Override public void onSuccess(ScreenshotResult result) {
+                Bitmap hardware = null, cropped = null, pixels = null;
+                try (HardwareBuffer buffer = result.getHardwareBuffer()) {
+                    if (!visualScanAllowed(owner, generation, now)) { visualScanInFlight = false; return; }
+                    hardware = Bitmap.wrapHardwareBuffer(buffer, result.getColorSpace());
+                    if (hardware == null) { visualScanFailed(generation, "Capture unavailable"); return; }
+                    if (hardware.getWidth() != 1920 || hardware.getHeight() != 1080) {
+                        visualScanFailed(generation, "Visual profile requires 1920×1080"); return;
+                    }
+                    // Retain only the player footer on the worker, reducing bitmap/GC pressure.
+                    cropped = Bitmap.createBitmap(hardware, 0, 900, 1920, 180);
+                    pixels = cropped.copy(Bitmap.Config.ARGB_8888, false);
+                    if (pixels == null) { visualScanFailed(generation, "Pixels unavailable"); return; }
+                } catch (RuntimeException error) {
+                    if (pixels != null) pixels.recycle();
+                    visualScanFailed(generation, "Capture unavailable"); return;
+                } finally {
+                    if (cropped != null && cropped != hardware) cropped.recycle();
+                    if (hardware != null) hardware.recycle();
+                }
+                final Bitmap frame = pixels;
+                final boolean protectedFrame = visualSession.active() && cover.isShowing();
+                try { adControlExecutor.execute(() -> {
+                    try {
+                        int width = frame.getWidth(), height = frame.getHeight();
+                        int[] colors = new int[width * height];
+                        frame.getPixels(colors, 0, width, 0, 0, width, height);
+                        // A black/redacted capture of our own cover cannot prove an ad ended.
+                        boolean coverVisible = !protectedFrame || (width == 1920 && height == 180
+                                && (colors[10 * width + 900] & 0xffffff) != 0
+                                && (colors[20 * width + 1100] & 0xffffff) != 0);
+                        VisualAdDetector.Result match = visualDetector.detectFooter(colors, width, height);
+                        handler.post(() -> {
+                            visualScanInFlight = false;
+                            if (!visualScanAllowed(owner, generation, now)) return;
+                            if (!match.supported || !coverVisible) {
+                                visualScanFailed(generation, !match.supported
+                                        ? "Visual profile requires 1920×1080" : "Capture redacted"); return;
+                            }
+                            boolean wasActive = visualSession.active();
+                            nextVisualScanAt = 0;
+                            boolean active = visualSession.observe(match.ad(), match.sponsored != null, now);
+                            if (!wasActive && active) visualWindows = new android.graphics.Rect[] {
+                                    labelWindow(match.sponsored), labelWindow(match.phone) };
+                            visualResult = match.ad() ? "AD_PAIR" : match.sponsored != null ? "SPONSORED" : "NO_MARKERS";
+                            if (debugBuild()) android.util.Log.i("ADMuteVisual", "capture=" + now
+                                    + " result=" + visualResult + " active=" + active
+                                    + " latencyMs=" + (SystemClock.elapsedRealtime() - now));
+                            evaluate();
+                        });
+                    } catch (RuntimeException error) {
+                        handler.post(() -> visualScanFailed(generation, "Visual processing failed"));
+                    } finally { frame.recycle(); }
+                }); } catch (RuntimeException error) {
+                    frame.recycle(); visualScanFailed(generation, "Visual worker unavailable");
+                }
+            }
+            @Override public void onFailure(int code) { visualScanFailed(generation, "Capture error " + code); }
+        }); } catch (RuntimeException error) { visualScanFailed(generation, "Capture request failed"); }
+    }
     private void requestAdControlScan(String owner, long now) {
         if (Build.VERSION.SDK_INT < 30 || !prefs.getBoolean("autoSkip", false)
                 || !prefs.getBoolean("enabled", true) || now < pausedUntil
@@ -423,7 +586,7 @@ public final class AdAccessibilityService extends AccessibilityService {
         }
     }
     private boolean adControlScanAllowed(String owner, long generation, long startedAt) {
-        return running && prefs != null && prefs.getBoolean("autoSkip", false)
+        return running && !visualEnabled() && prefs != null && prefs.getBoolean("autoSkip", false)
                 && adControlGuard.current(generation, startedAt, SystemClock.elapsedRealtime())
                 && prefs.getBoolean("enabled", true) && prefs.getBoolean(owner, true)
                 && SystemClock.elapsedRealtime() >= pausedUntil

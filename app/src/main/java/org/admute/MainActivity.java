@@ -46,7 +46,9 @@ public final class MainActivity extends Activity {
         toggle(panel, "Comfort protection", "enabled");
         toggle(panel, "Mute ad sound", "mute");
         toggle(panel, "Cover ads with a dark, still texture", "cover");
-        text(panel, "Optional YouTube ad controls: on Android 11 or newer, ADMute scans selected YouTube screens on-device for a lower-right Skip ad, or Skip/Dismiss paired with Sponsored. Captured pixels and recognized text are discarded and never uploaded.", 17);
+        text(panel, "Visual YouTube protection: locally matches the English Sponsored + Send to phone player labels on the inspected 1920×1080 layout. No OCR model or download is needed. Two tiny label areas remain visible through the cover so it can detect the ad ending. These areas can show picture content. Recognition starts after labels appear and can miss ads or layout changes; it cannot prevent every initial flash or sound. Capture failures hold existing protection; double Back releases it.", 17);
+        toggle(panel, "Visual YouTube protection · small label windows", "visualProtection");
+        text(panel, "Optional YouTube ad controls: on Android 11 or newer, ADMute scans selected YouTube screens on-device for a lower-right Skip ad, or Skip/Dismiss paired with Sponsored. This older OCR control mode is suspended while visual protection is enabled. Captured pixels and recognized text are discarded and never uploaded.", 17);
         toggle(panel, "Automatically activate visible Dismiss/Skip controls", "autoSkip");
         text(panel, "Selected apps", 20);
         toggle(panel, "YouTube", AdDetector.YOUTUBE);
@@ -54,7 +56,7 @@ public final class MainActivity extends Activity {
         toggle(panel, "Plex", AdDetector.PLEX);
         button(panel, "Enable accessibility service", view -> new AlertDialog.Builder(this)
                 .setTitle("Enable ad comfort")
-                .setMessage("ADMute reads on-screen accessibility labels to recognize ad breaks in your selected apps. If you enable automatic ad controls, it also scans YouTube screenshots on this TV to locate explicit Dismiss or Skip ad controls. Captured pixels and recognized text are discarded; nothing is uploaded. It can activate those controls, control media volume, and show a dark cover. "
+                .setMessage("ADMute reads on-screen accessibility labels to recognize ad breaks in your selected apps. Optional visual YouTube protection matches two ad labels in local screenshots and leaves tiny label areas visible through its cover to detect the ad ending. Optional OCR controls scan for Dismiss/Skip. Captured pixels and recognized text are discarded; nothing is uploaded. It can activate those controls, control media volume, and show a dark cover. "
                         + "In the next screen, select ADMute and enable it.")
                 .setPositiveButton("Open settings", (dialog, which) -> {
                     try { startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); }
@@ -83,8 +85,8 @@ public final class MainActivity extends Activity {
     private void toggle(LinearLayout panel, String label, String key) {
         Switch control = new Switch(this); control.setText(label); control.setTextSize(19);
         control.setPadding(dp(12), dp(8), dp(12), dp(8)); control.setMinHeight(dp(52));
-        control.setChecked(prefs.getBoolean(key, !"autoSkip".equals(key)));
-        if ("autoSkip".equals(key) && android.os.Build.VERSION.SDK_INT < 30) {
+        control.setChecked(prefs.getBoolean(key, !"autoSkip".equals(key) && !"visualProtection".equals(key)));
+        if (("autoSkip".equals(key) || "visualProtection".equals(key)) && android.os.Build.VERSION.SDK_INT < 30) {
             control.setEnabled(false);
             control.setText(getString(R.string.ad_controls_requires_android_11, label));
         }
@@ -100,7 +102,19 @@ public final class MainActivity extends Activity {
         Button button = new Button(this); button.setText(label); button.setAllCaps(false); button.setOnClickListener(listener);
         panel.addView(button, new LinearLayout.LayoutParams(-1, dp(52)));
     }
-    @Override protected void onResume() { super.onResume(); handler.post(refresh); }
+    @Override protected void onResume() {
+        super.onResume(); handler.post(refresh);
+        if (prefs.getBoolean("enabled", true)) {
+            AccessibilityManager manager = getSystemService(AccessibilityManager.class);
+            for (AccessibilityServiceInfo service : manager.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_ALL_MASK)) {
+                if (getPackageName().equals(service.getResolveInfo().serviceInfo.packageName)) {
+                    try { startForegroundService(new Intent(this, AdAccessibilityService.class)); }
+                    catch (RuntimeException ignored) { /* Accessibility binding remains the functional owner. */ }
+                    break;
+                }
+            }
+        }
+    }
     @Override protected void onPause() { handler.removeCallbacks(refresh); super.onPause(); }
     @Override protected void onDestroy() { if (prefListener != null) prefs.unregisterOnSharedPreferenceChangeListener(prefListener); super.onDestroy(); }
 }
