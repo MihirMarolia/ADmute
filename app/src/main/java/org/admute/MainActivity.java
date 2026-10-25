@@ -18,6 +18,7 @@ import android.widget.ScrollView;
 import android.widget.Switch;
 import android.widget.TextView;
 import org.admute.core.AdDetector;
+import org.admute.core.EnhancedAudioController;
 
 public final class MainActivity extends Activity {
     private SharedPreferences prefs;
@@ -74,6 +75,8 @@ public final class MainActivity extends Activity {
                 .setMessage(prefs.getString("sample", "No sample yet. Enable accessibility and open a selected app first.")
                         + "\n\nOnly app name, label count, and detection result are saved here. Screen text is never saved. This sample may be from earlier playback.")
                 .setPositiveButton("Close", null).show());
+        button(panel, "OEM diagnostics & fixes", view -> showOemDiagnostics());
+        button(panel, "Audio diagnostics", view -> showAudioDiagnostics());
         text(panel, "Recovery: press Back twice within 0.8 seconds to release protection for one minute. Home or leaving the app also releases it. Remote keys keep working under the cover. Some TV/soundbar setups do not support media-volume control.", 17);
         text(panel, "Before relying on this, test a full ad break in each app on your TV. The first fraction of a second may remain visible and audible.", 17);
     }
@@ -101,6 +104,71 @@ public final class MainActivity extends Activity {
     private void button(LinearLayout panel, String label, View.OnClickListener listener) {
         Button button = new Button(this); button.setText(label); button.setAllCaps(false); button.setOnClickListener(listener);
         panel.addView(button, new LinearLayout.LayoutParams(-1, dp(52)));
+    }
+    private void showOemDiagnostics() {
+        OemDiagnostics diagnostics = new OemDiagnostics(this);
+        diagnostics.checkAll();
+        StringBuilder message = new StringBuilder();
+        message.append("Device: ").append(diagnostics.getDeviceModel()).append("\n\n");
+        message.append(diagnostics.getSummary());
+        if (diagnostics.hasCriticalIssues()) {
+            message.append("\n\nCRITICAL: These issues will prevent reliable operation.");
+        }
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("OEM Diagnostics");
+        builder.setMessage(message.toString());
+        builder.setPositiveButton("Close", null);
+        if (!diagnostics.getIssues().isEmpty()) {
+            builder.setNeutralButton("Fix issues", (dialog, which) -> showOemFixOptions(diagnostics));
+        }
+        builder.show();
+    }
+    private void showOemFixOptions(OemDiagnostics diagnostics) {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Fix OEM Restrictions");
+        builder.setMessage("Choose which settings to enable:");
+        builder.setPositiveButton("Done", null);
+        String[] options = new String[]{
+            "Disable battery optimization",
+            "Enable developer options",
+            "Open manufacturer app settings",
+            "Check running services"
+        };
+        builder.setItems(options, (dialog, which) -> {
+            Intent intent = null;
+            switch (which) {
+                case 0:
+                    intent = diagnostics.getBatteryOptimizationIntent();
+                    break;
+                case 1:
+                    intent = diagnostics.getDeveloperOptionsIntent();
+                    break;
+                case 2:
+                    intent = diagnostics.getManufacturerSettingsIntent();
+                    break;
+                case 3:
+                    intent = diagnostics.getRunningServicesIntent();
+                    break;
+            }
+            if (intent != null) {
+                try { startActivity(intent); }
+                catch (RuntimeException e) {
+                    new AlertDialog.Builder(this)
+                        .setMessage("Could not open settings. Navigate manually: Settings → Apps → ADMute.")
+                        .setPositiveButton("OK", null).show();
+                }
+            }
+        });
+        builder.show();
+    }
+    private void showAudioDiagnostics() {
+        EnhancedAudioController audio = new EnhancedAudioController(this);
+        String diagnostics = audio.getDiagnostics();
+        new AlertDialog.Builder(this)
+            .setTitle("Audio System Diagnostics")
+            .setMessage(diagnostics)
+            .setPositiveButton("Close", null)
+            .show();
     }
     @Override protected void onResume() {
         super.onResume(); handler.post(refresh);

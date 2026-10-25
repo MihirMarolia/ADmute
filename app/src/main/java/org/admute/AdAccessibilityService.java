@@ -24,6 +24,7 @@ import org.admute.core.AdSession;
 import org.admute.core.VolumeLease;
 import org.admute.core.VisualAdDetector;
 import org.admute.core.VisualAdSession;
+import org.admute.core.EnhancedAudioController;
 import android.util.SparseArray;
 import com.google.android.gms.vision.Frame;
 import com.google.android.gms.vision.text.Text;
@@ -54,6 +55,7 @@ public final class AdAccessibilityService extends AccessibilityService {
     private String reliabilityIssue = "";
     private ScreenCover cover;
     private VolumeLease volume;
+    private EnhancedAudioController enhancedAudio;
     private SharedPreferences prefs;
     private long lastBack = -10000;
     private long pausedUntil;
@@ -71,6 +73,7 @@ public final class AdAccessibilityService extends AccessibilityService {
     private final AdControlGuard adControlGuard = new AdControlGuard();
     private String foregroundOwner = "";
     private String adControlResult = "NONE";
+    private ProcessGuard processGuard;
     private final Runnable tick = new Runnable() {
         @Override public void run() {
             if (!running) return;
@@ -100,6 +103,9 @@ public final class AdAccessibilityService extends AccessibilityService {
         prefs = Preferences.get(this);
         prefs.registerOnSharedPreferenceChangeListener(settingsListener);
         cover = new ScreenCover(this);
+        processGuard = new ProcessGuard(this);
+        processGuard.enable();
+        enhancedAudio = new EnhancedAudioController(this);
         AudioManager audio = getSystemService(AudioManager.class);
         volume = new VolumeLease(new VolumeLease.Port() {
             public int volume() { return audio.getStreamVolume(AudioManager.STREAM_MUSIC); }
@@ -151,6 +157,7 @@ public final class AdAccessibilityService extends AccessibilityService {
     }
     private void evaluate() {
         long now = SystemClock.elapsedRealtime();
+        if (processGuard != null) processGuard.recordHeartbeat();
         updateForegroundNotice();
         boolean enabled = prefs.getBoolean("enabled", true) && now >= pausedUntil;
         if (!enabled) { resetVisual(); debugComfortUntil = 0; adControlGuard.reset(); session.reset(); release(); status("Paused"); return; }
@@ -259,6 +266,7 @@ public final class AdAccessibilityService extends AccessibilityService {
     private void stop() {
         resetVisual();
         adControlGuard.reset();
+        if (processGuard != null) processGuard.disable();
         if (prefs != null) prefs.unregisterOnSharedPreferenceChangeListener(settingsListener);
         running = false; debugComfortUntil = 0; handler.removeCallbacksAndMessages(null); session.reset(); release(); status("Service stopped");
         stopForeground(STOP_FOREGROUND_REMOVE); foregroundNotice = false;
