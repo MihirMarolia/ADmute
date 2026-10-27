@@ -1,0 +1,3 @@
+<resources>
+    <string name="service_description">Debug sensory comfort build. Reads selected apps’ accessibility labels locally. Optional visual YouTube protection matches Sponsored + Send to phone in local screenshots of the inspected English 1920×1080 layout, mutes media and covers the picture except two tiny label areas used to detect ad endings. These areas can expose picture content. Frames are discarded; no uploads or recordings. Optional OCR Dismiss/Skip controls are suspended in visual mode. A developer probe retains brightness counts only. Double Back releases protection for one minute. Detection can miss ads and cannot prevent every initial flash or sound.</string>
+</resources>

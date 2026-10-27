@@ -1,0 +1,11 @@
+.gradle/
+**/build/
+local.properties
+.toolchain/
+*.jks
+*.keystore
+dist/
+admute-window.xml
+.signing/
+.device-tools/
+.device-state/
